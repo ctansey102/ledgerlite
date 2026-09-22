@@ -1,6 +1,15 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import type { Account, JournalEntry, JournalLine, Profile } from "@/lib/database.types";
+import type {
+  Account,
+  Customer,
+  FixedAsset,
+  JournalEntry,
+  JournalLine,
+  Profile,
+  SubledgerPosting,
+  Vendor,
+} from "@/lib/database.types";
 
 export async function getAuthUser() {
   const supabase = await createClient();
@@ -98,4 +107,94 @@ export function flattenLedgerLines(lines: LineWithEntry[]) {
     description: line.journal_entries.description,
     entered_by_name: line.journal_entries.enterer?.display_name ?? "Unknown",
   }));
+}
+
+export async function getCustomers(userId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("customers")
+    .select("*")
+    .eq("user_id", userId)
+    .order("name");
+  if (error) throw error;
+  return (data ?? []) as Customer[];
+}
+
+export async function getVendors(userId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("vendors")
+    .select("*")
+    .eq("user_id", userId)
+    .order("name");
+  if (error) throw error;
+  return (data ?? []) as Vendor[];
+}
+
+export async function getFixedAssets(userId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("fixed_assets")
+    .select("*")
+    .eq("user_id", userId)
+    .order("name");
+  if (error) throw error;
+  return (data ?? []) as FixedAsset[];
+}
+
+export async function getSubledgerPostings(
+  userId: string,
+  subledger?: "ar" | "ap" | "fa",
+) {
+  const supabase = await createClient();
+  let query = supabase
+    .from("subledger_postings")
+    .select("*")
+    .eq("user_id", userId)
+    .order("posting_date", { ascending: false })
+    .order("created_at", { ascending: false });
+
+  if (subledger) {
+    query = query.eq("subledger", subledger);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data ?? []) as SubledgerPosting[];
+}
+
+export async function getCustomer(userId: string, customerId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("customers")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("id", customerId)
+    .maybeSingle();
+  if (error) throw error;
+  return data as Customer | null;
+}
+
+export async function getVendor(userId: string, vendorId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("vendors")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("id", vendorId)
+    .maybeSingle();
+  if (error) throw error;
+  return data as Vendor | null;
+}
+
+export async function getFixedAsset(userId: string, assetId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("fixed_assets")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("id", assetId)
+    .maybeSingle();
+  if (error) throw error;
+  return data as FixedAsset | null;
 }
