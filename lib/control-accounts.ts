@@ -1,7 +1,14 @@
 import type { Account } from "@/lib/database.types";
 import { createClient } from "@/lib/supabase/server";
 
-export type SubledgerKey = "ar" | "ap" | "fa" | "fa_accum";
+export type SubledgerKey =
+  | "ar"
+  | "ap"
+  | "fa"
+  | "fa_accum"
+  | "inv"
+  | "cash"
+  | "payroll";
 
 export const CONTROL_ACCOUNT_DEFAULTS: Record<
   SubledgerKey,
@@ -46,6 +53,30 @@ export const CONTROL_ACCOUNT_DEFAULTS: Record<
     cash_flow_section: "investing",
     is_contra: true,
   },
+  inv: {
+    code: "1300",
+    name: "Inventory",
+    type: "asset",
+    normal_balance: "debit",
+    cash_flow_section: "operating",
+    is_contra: false,
+  },
+  cash: {
+    code: "1000",
+    name: "Cash",
+    type: "asset",
+    normal_balance: "debit",
+    cash_flow_section: "cash",
+    is_contra: false,
+  },
+  payroll: {
+    code: "5400",
+    name: "Wages Expense",
+    type: "expense",
+    normal_balance: "debit",
+    cash_flow_section: "operating",
+    is_contra: false,
+  },
 };
 
 const SUPPORTING_DEFAULTS = [
@@ -56,12 +87,21 @@ const SUPPORTING_DEFAULTS = [
     normal_balance: "debit" as const,
     cash_flow_section: "cash",
     is_contra: false,
+    subledger: "cash" as const,
   },
   {
     code: "4000",
     name: "Service Revenue",
     type: "revenue" as const,
     normal_balance: "credit" as const,
+    cash_flow_section: "operating",
+    is_contra: false,
+  },
+  {
+    code: "5000",
+    name: "Cost of Goods Sold",
+    type: "expense" as const,
+    normal_balance: "debit" as const,
     cash_flow_section: "operating",
     is_contra: false,
   },
@@ -162,7 +202,7 @@ async function findOrCreateAccount(
   return created as Account;
 }
 
-/** Ensures AR/AP/FA control accounts (and helpful companion GL accounts) exist. */
+/** Ensures AR/AP/FA/Inventory/Cash/Payroll control accounts (and companions) exist. */
 export async function ensureControlAccounts(userId: string) {
   const controls = {
     ar: await findOrCreateAccount(userId, {
@@ -181,16 +221,28 @@ export async function ensureControlAccounts(userId: string) {
       ...CONTROL_ACCOUNT_DEFAULTS.fa_accum,
       subledger: "fa_accum",
     }),
+    inv: await findOrCreateAccount(userId, {
+      ...CONTROL_ACCOUNT_DEFAULTS.inv,
+      subledger: "inv",
+    }),
+    cash: await findOrCreateAccount(userId, {
+      ...CONTROL_ACCOUNT_DEFAULTS.cash,
+      subledger: "cash",
+    }),
+    payroll: await findOrCreateAccount(userId, {
+      ...CONTROL_ACCOUNT_DEFAULTS.payroll,
+      subledger: "payroll",
+    }),
   };
 
-  const cash = await findOrCreateAccount(userId, SUPPORTING_DEFAULTS[0]);
   const revenue = await findOrCreateAccount(userId, SUPPORTING_DEFAULTS[1]);
+  const cogs = await findOrCreateAccount(userId, SUPPORTING_DEFAULTS[2]);
   const depreciationExpense = await findOrCreateAccount(
     userId,
-    SUPPORTING_DEFAULTS[2],
+    SUPPORTING_DEFAULTS[3],
   );
 
-  return { ...controls, cash, revenue, depreciationExpense };
+  return { ...controls, revenue, cogs, depreciationExpense };
 }
 
 export function controlAccountFor(

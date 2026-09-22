@@ -7,7 +7,9 @@ import {
   flattenLedgerLines,
   getAccounts,
   getCustomers,
+  getEmployees,
   getFixedAssets,
+  getInventoryItems,
   getLedgerLines,
   getProfile,
   getSubledgerPostings,
@@ -17,6 +19,7 @@ import {
 import { formatMoney } from "@/lib/money";
 import {
   controlBalanceCents,
+  inventoryBalances,
   subledgerTotalCents,
 } from "@/lib/subledgers";
 
@@ -33,9 +36,14 @@ export default async function SubledgersHubPage({
     customers,
     vendors,
     assets,
+    items,
+    employees,
     arPostings,
     apPostings,
     faPostings,
+    invPostings,
+    cashPostings,
+    payrollPostings,
     rawLines,
   ] = await Promise.all([
     getProfile(user.id),
@@ -43,9 +51,14 @@ export default async function SubledgersHubPage({
     getCustomers(user.id).catch(() => []),
     getVendors(user.id).catch(() => []),
     getFixedAssets(user.id).catch(() => []),
+    getInventoryItems(user.id).catch(() => []),
+    getEmployees(user.id).catch(() => []),
     getSubledgerPostings(user.id, "ar").catch(() => []),
     getSubledgerPostings(user.id, "ap").catch(() => []),
     getSubledgerPostings(user.id, "fa").catch(() => []),
+    getSubledgerPostings(user.id, "inv").catch(() => []),
+    getSubledgerPostings(user.id, "cash").catch(() => []),
+    getSubledgerPostings(user.id, "payroll").catch(() => []),
     getLedgerLines(user.id),
   ]);
 
@@ -54,6 +67,9 @@ export default async function SubledgersHubPage({
   const apControl = controlAccountFor(accounts, "ap");
   const faControl = controlAccountFor(accounts, "fa");
   const faAccum = controlAccountFor(accounts, "fa_accum");
+  const invControl = controlAccountFor(accounts, "inv");
+  const cashControl = controlAccountFor(accounts, "cash");
+  const payrollControl = controlAccountFor(accounts, "payroll");
 
   const arGl = arControl
     ? controlBalanceCents(
@@ -79,10 +95,40 @@ export default async function SubledgersHubPage({
         lines.filter((line) => line.account_id === faAccum.id),
       )
     : 0;
+  const invGl = invControl
+    ? controlBalanceCents(
+        invControl,
+        lines.filter((line) => line.account_id === invControl.id),
+      )
+    : 0;
+  const cashGl = cashControl
+    ? controlBalanceCents(
+        cashControl,
+        lines.filter((line) => line.account_id === cashControl.id),
+      )
+    : 0;
+  const payrollGl = payrollControl
+    ? controlBalanceCents(
+        payrollControl,
+        lines.filter((line) => line.account_id === payrollControl.id),
+      )
+    : 0;
 
   const arSub = subledgerTotalCents("ar", arPostings);
   const apSub = subledgerTotalCents("ap", apPostings);
   const faSub = subledgerTotalCents("fa", faPostings);
+  const invSub = inventoryBalances(items, invPostings).reduce(
+    (sum, item) => sum + item.valueCents,
+    0,
+  );
+  const cashSub = cashPostings.reduce((sum, posting) => {
+    const debit = Math.round(Number(posting.debit) * 100);
+    const credit = Math.round(Number(posting.credit) * 100);
+    return sum + debit - credit;
+  }, 0);
+  const payrollSub = payrollPostings.reduce((sum, posting) => {
+    return sum + Math.round(Number(posting.debit) * 100);
+  }, 0);
   const faNetGl = faGl - faAccumGl;
 
   const cards = [
@@ -115,6 +161,39 @@ export default async function SubledgersHubPage({
         ? `${faControl.code} · ${faControl.name} (net of accum. dep.)`
         : "Not set up yet",
     },
+    {
+      href: "/subledgers/cash",
+      title: "Cash book",
+      body: "Receipts and disbursements that roll up to the Cash control account.",
+      parties: `${cashPostings.length} movement${cashPostings.length === 1 ? "" : "s"}`,
+      sub: cashSub,
+      gl: cashGl,
+      control: cashControl
+        ? `${cashControl.code} · ${cashControl.name}`
+        : "Not set up yet",
+    },
+    {
+      href: "/subledgers/inventory",
+      title: "Inventory",
+      body: "Stock purchases and issues that roll up to the Inventory control account.",
+      parties: `${items.length} item${items.length === 1 ? "" : "s"}`,
+      sub: invSub,
+      gl: invGl,
+      control: invControl
+        ? `${invControl.code} · ${invControl.name}`
+        : "Not set up yet",
+    },
+    {
+      href: "/subledgers/payroll",
+      title: "Payroll",
+      body: "Wage payments by employee that roll up to Wages Expense.",
+      parties: `${employees.length} employee${employees.length === 1 ? "" : "s"}`,
+      sub: payrollSub,
+      gl: payrollGl,
+      control: payrollControl
+        ? `${payrollControl.code} · ${payrollControl.name}`
+        : "Not set up yet",
+    },
   ];
 
   return (
@@ -137,11 +216,11 @@ export default async function SubledgersHubPage({
 
       <form action={ensureSubledgerAccountsAction} className="mt-4">
         <button className="rounded-full border border-line bg-paper px-4 py-2 text-sm text-forest hover:border-forest">
-          Set up AR / AP / FA control accounts
+          Set up control accounts
         </button>
       </form>
 
-      <div className="mt-8 grid gap-4 lg:grid-cols-3">
+      <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {cards.map((card) => {
           const tied = card.sub === card.gl;
           return (

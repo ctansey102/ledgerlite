@@ -26,7 +26,7 @@ export default async function DashboardPage() {
   const month = resolvePeriod("this-month");
   const income = netIncome(accounts, lines, { from: month.from, to: month.to });
   const cash = balancesByAccount(accounts, lines, { to: todayISO() }).find(
-    (row) => row.account.code === "1000",
+    (row) => row.account.subledger === "cash" || row.account.code === "1000",
   );
 
   return (
@@ -54,7 +54,7 @@ export default async function DashboardPage() {
 
       <section className="mt-8 grid gap-4 md:grid-cols-3">
         {[
-          { label: "Cash on hand", value: cash?.signed ?? 0, href: "/accounts" },
+          { label: "Cash on hand", value: cash?.signed ?? 0, href: "/subledgers/cash" },
           { label: `${month.label} revenue`, value: income.revenue, href: "/statements" },
           { label: `${month.label} net income`, value: income.net, href: "/statements" },
         ].map((card) => (

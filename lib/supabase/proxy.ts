@@ -52,7 +52,8 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith("/dashboard") ||
     pathname.startsWith("/journal") ||
     pathname.startsWith("/accounts") ||
-    pathname.startsWith("/statements");
+    pathname.startsWith("/statements") ||
+    pathname.startsWith("/subledgers");
   const isAuthPage = pathname === "/login" || pathname === "/signup";
 
   if (!user && isProtected) {

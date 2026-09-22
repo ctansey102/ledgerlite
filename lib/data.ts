@@ -3,7 +3,9 @@ import { createClient } from "@/lib/supabase/server";
 import type {
   Account,
   Customer,
+  Employee,
   FixedAsset,
+  InventoryItem,
   JournalEntry,
   JournalLine,
   Profile,
@@ -142,9 +144,31 @@ export async function getFixedAssets(userId: string) {
   return (data ?? []) as FixedAsset[];
 }
 
+export async function getInventoryItems(userId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("inventory_items")
+    .select("*")
+    .eq("user_id", userId)
+    .order("sku");
+  if (error) throw error;
+  return (data ?? []) as InventoryItem[];
+}
+
+export async function getEmployees(userId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("employees")
+    .select("*")
+    .eq("user_id", userId)
+    .order("name");
+  if (error) throw error;
+  return (data ?? []) as Employee[];
+}
+
 export async function getSubledgerPostings(
   userId: string,
-  subledger?: "ar" | "ap" | "fa",
+  subledger?: "ar" | "ap" | "fa" | "inv" | "cash" | "payroll",
 ) {
   const supabase = await createClient();
   let query = supabase

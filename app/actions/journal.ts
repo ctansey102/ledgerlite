@@ -83,6 +83,7 @@ export async function createJournalEntry(formData: FormData) {
   revalidatePath("/journal");
   revalidatePath("/accounts");
   revalidatePath("/statements");
+  revalidatePath("/subledgers");
   redirect(`/journal/${entry.id}`);
 }
 
@@ -100,6 +101,7 @@ export async function deleteJournalEntry(formData: FormData) {
   revalidatePath("/journal");
   revalidatePath("/accounts");
   revalidatePath("/statements");
+  revalidatePath("/subledgers");
   redirect("/journal");
 }
 

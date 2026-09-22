@@ -22,6 +22,9 @@ function revalidateBooks() {
   revalidatePath("/subledgers/ar");
   revalidatePath("/subledgers/ap");
   revalidatePath("/subledgers/fa");
+  revalidatePath("/subledgers/cash");
+  revalidatePath("/subledgers/inventory");
+  revalidatePath("/subledgers/payroll");
 }
 
 function fail(path: string, message: string): never {
@@ -509,6 +512,326 @@ export async function postFaDepreciation(formData: FormData) {
     fail(
       "/subledgers/fa",
       err instanceof Error ? err.message : "Could not post depreciation.",
+    );
+  }
+
+  revalidateBooks();
+  redirect(`/journal/${entryId}`);
+}
+
+export async function createInventoryItem(formData: FormData) {
+  const user = await requireUser();
+  const supabase = await createClient();
+  const sku = asString(formData.get("sku"));
+  const name = asString(formData.get("name"));
+  const unitCost = dollarsToCents(asString(formData.get("unit_cost")));
+
+  if (!sku || !name) fail("/subledgers/inventory", "Add a SKU and item name.");
+
+  const { error } = await supabase.from("inventory_items").insert({
+    user_id: user.id,
+    sku,
+    name,
+    unit_cost: unitCost / 100,
+  });
+
+  if (error) fail("/subledgers/inventory", error.message);
+
+  revalidatePath("/subledgers/inventory");
+  redirect("/subledgers/inventory");
+}
+
+export async function recordInventoryPurchase(formData: FormData) {
+  const user = await requireUser();
+  const itemId = asString(formData.get("item_id"));
+  const offsetAccountId = asString(formData.get("offset_account_id"));
+  const entryDate = asString(formData.get("entry_date"));
+  const quantity = Number.parseFloat(asString(formData.get("quantity")));
+  const unitCostCents = dollarsToCents(asString(formData.get("unit_cost")));
+  const description =
+    asString(formData.get("description")) || "Inventory purchase";
+
+  if (
+    !itemId ||
+    !offsetAccountId ||
+    !entryDate ||
+    !(quantity > 0) ||
+    unitCostCents <= 0
+  ) {
+    fail(
+      "/subledgers/inventory",
+      "Add an item, quantity, unit cost, date, and payment account.",
+    );
+  }
+
+  const amountCents = Math.round(quantity * unitCostCents);
+  let entryId: string;
+  try {
+    const controls = await ensureControlAccounts(user.id);
+    if (offsetAccountId === controls.inv.id) {
+      fail("/subledgers/inventory", "Choose a different account to credit.");
+    }
+
+    const supabase = await createClient();
+    await supabase
+      .from("inventory_items")
+      .update({ unit_cost: unitCostCents / 100 })
+      .eq("id", itemId)
+      .eq("user_id", user.id);
+
+    entryId = await postBalancedEntry({
+      userId: user.id,
+      entryDate,
+      description,
+      source: "inv",
+      sourceKind: "purchase",
+      glLines: [
+        { accountId: controls.inv.id, debitCents: amountCents, creditCents: 0 },
+        { accountId: offsetAccountId, debitCents: 0, creditCents: amountCents },
+      ],
+      subledgerPostings: [
+        {
+          subledger: "inv",
+          kind: "purchase",
+          postingDate: entryDate,
+          description,
+          debitCents: amountCents,
+          creditCents: 0,
+          inventoryItemId: itemId,
+          quantity,
+        },
+      ],
+    });
+  } catch (err) {
+    fail(
+      "/subledgers/inventory",
+      err instanceof Error ? err.message : "Could not record purchase.",
+    );
+  }
+
+  revalidateBooks();
+  redirect(`/journal/${entryId}`);
+}
+
+export async function recordInventoryIssue(formData: FormData) {
+  const user = await requireUser();
+  const itemId = asString(formData.get("item_id"));
+  const entryDate = asString(formData.get("entry_date"));
+  const quantity = Number.parseFloat(asString(formData.get("quantity")));
+  const description =
+    asString(formData.get("description")) || "Inventory issued to COGS";
+
+  if (!itemId || !entryDate || !(quantity > 0)) {
+    fail(
+      "/subledgers/inventory",
+      "Add an item, quantity, and date to issue stock.",
+    );
+  }
+
+  const supabase = await createClient();
+  const { data: item } = await supabase
+    .from("inventory_items")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("id", itemId)
+    .maybeSingle();
+
+  if (!item) fail("/subledgers/inventory", "That inventory item was not found.");
+
+  const unitCostCents = dollarsToCents(item.unit_cost);
+  const amountCents = Math.round(quantity * unitCostCents);
+  if (amountCents <= 0) {
+    fail(
+      "/subledgers/inventory",
+      "Set a unit cost on the item before issuing stock.",
+    );
+  }
+
+  let entryId: string;
+  try {
+    const controls = await ensureControlAccounts(user.id);
+    entryId = await postBalancedEntry({
+      userId: user.id,
+      entryDate,
+      description,
+      source: "inv",
+      sourceKind: "issue",
+      glLines: [
+        { accountId: controls.cogs.id, debitCents: amountCents, creditCents: 0 },
+        { accountId: controls.inv.id, debitCents: 0, creditCents: amountCents },
+      ],
+      subledgerPostings: [
+        {
+          subledger: "inv",
+          kind: "issue",
+          postingDate: entryDate,
+          description,
+          debitCents: 0,
+          creditCents: amountCents,
+          inventoryItemId: itemId,
+          quantity,
+        },
+      ],
+    });
+  } catch (err) {
+    fail(
+      "/subledgers/inventory",
+      err instanceof Error ? err.message : "Could not issue inventory.",
+    );
+  }
+
+  revalidateBooks();
+  redirect(`/journal/${entryId}`);
+}
+
+export async function recordCashMovement(formData: FormData) {
+  const user = await requireUser();
+  const kind = asString(formData.get("kind"));
+  const entryDate = asString(formData.get("entry_date"));
+  const offsetAccountId = asString(formData.get("offset_account_id"));
+  const amountCents = dollarsToCents(asString(formData.get("amount")));
+  const description = asString(formData.get("description"));
+
+  if (
+    (kind !== "receipt" && kind !== "disbursement") ||
+    !entryDate ||
+    !offsetAccountId ||
+    !description ||
+    amountCents <= 0
+  ) {
+    fail(
+      "/subledgers/cash",
+      "Add a type, date, amount, description, and the other account.",
+    );
+  }
+
+  let entryId: string;
+  try {
+    const controls = await ensureControlAccounts(user.id);
+    if (offsetAccountId === controls.cash.id) {
+      fail("/subledgers/cash", "Choose a different account for the other side.");
+    }
+
+    const glLines =
+      kind === "receipt"
+        ? [
+            {
+              accountId: controls.cash.id,
+              debitCents: amountCents,
+              creditCents: 0,
+            },
+            {
+              accountId: offsetAccountId,
+              debitCents: 0,
+              creditCents: amountCents,
+            },
+          ]
+        : [
+            {
+              accountId: offsetAccountId,
+              debitCents: amountCents,
+              creditCents: 0,
+            },
+            {
+              accountId: controls.cash.id,
+              debitCents: 0,
+              creditCents: amountCents,
+            },
+          ];
+
+    entryId = await postBalancedEntry({
+      userId: user.id,
+      entryDate,
+      description,
+      source: "cash",
+      sourceKind: kind,
+      glLines,
+      subledgerPostings: [
+        {
+          subledger: "cash",
+          kind,
+          postingDate: entryDate,
+          description,
+          debitCents: kind === "receipt" ? amountCents : 0,
+          creditCents: kind === "disbursement" ? amountCents : 0,
+        },
+      ],
+    });
+  } catch (err) {
+    fail(
+      "/subledgers/cash",
+      err instanceof Error ? err.message : "Could not record cash movement.",
+    );
+  }
+
+  revalidateBooks();
+  redirect(`/journal/${entryId}`);
+}
+
+export async function createEmployee(formData: FormData) {
+  const user = await requireUser();
+  const supabase = await createClient();
+  const name = asString(formData.get("name"));
+  const email = asString(formData.get("email"));
+
+  if (!name) fail("/subledgers/payroll", "Add the employee name.");
+
+  const { error } = await supabase.from("employees").insert({
+    user_id: user.id,
+    name,
+    email: email || null,
+  });
+
+  if (error) fail("/subledgers/payroll", error.message);
+
+  revalidatePath("/subledgers/payroll");
+  redirect("/subledgers/payroll");
+}
+
+export async function recordWagePayment(formData: FormData) {
+  const user = await requireUser();
+  const employeeId = asString(formData.get("employee_id"));
+  const entryDate = asString(formData.get("entry_date"));
+  const amountCents = dollarsToCents(asString(formData.get("amount")));
+  const description = asString(formData.get("description")) || "Wage payment";
+
+  if (!employeeId || !entryDate || amountCents <= 0) {
+    fail("/subledgers/payroll", "Add an employee, date, and wage amount.");
+  }
+
+  let entryId: string;
+  try {
+    const controls = await ensureControlAccounts(user.id);
+    entryId = await postBalancedEntry({
+      userId: user.id,
+      entryDate,
+      description,
+      source: "payroll",
+      sourceKind: "wage",
+      glLines: [
+        {
+          accountId: controls.payroll.id,
+          debitCents: amountCents,
+          creditCents: 0,
+        },
+        { accountId: controls.cash.id, debitCents: 0, creditCents: amountCents },
+      ],
+      subledgerPostings: [
+        {
+          subledger: "payroll",
+          kind: "wage",
+          postingDate: entryDate,
+          description,
+          debitCents: amountCents,
+          creditCents: 0,
+          employeeId,
+        },
+      ],
+    });
+  } catch (err) {
+    fail(
+      "/subledgers/payroll",
+      err instanceof Error ? err.message : "Could not record wage payment.",
     );
   }
 

@@ -7,7 +7,7 @@ export type GlLineInput = {
 };
 
 export type SubledgerPostingInput = {
-  subledger: "ar" | "ap" | "fa";
+  subledger: "ar" | "ap" | "fa" | "inv" | "cash" | "payroll";
   kind: string;
   postingDate: string;
   description: string;
@@ -16,6 +16,9 @@ export type SubledgerPostingInput = {
   customerId?: string | null;
   vendorId?: string | null;
   assetId?: string | null;
+  inventoryItemId?: string | null;
+  employeeId?: string | null;
+  quantity?: number | null;
 };
 
 /**
@@ -26,7 +29,7 @@ export async function postBalancedEntry(options: {
   userId: string;
   entryDate: string;
   description: string;
-  source: "manual" | "ar" | "ap" | "fa";
+  source: "manual" | "ar" | "ap" | "fa" | "inv" | "cash" | "payroll";
   sourceKind?: string;
   glLines: GlLineInput[];
   subledgerPostings?: SubledgerPostingInput[];
@@ -107,6 +110,9 @@ export async function postBalancedEntry(options: {
         customer_id: posting.customerId ?? null,
         vendor_id: posting.vendorId ?? null,
         asset_id: posting.assetId ?? null,
+        inventory_item_id: posting.inventoryItemId ?? null,
+        employee_id: posting.employeeId ?? null,
+        quantity: posting.quantity ?? null,
         journal_entry_id: entry.id,
       })),
     );

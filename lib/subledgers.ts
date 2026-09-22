@@ -83,3 +83,86 @@ export function monthlyDepreciationCents(
   if (depreciable <= 0) return 0;
   return Math.floor(depreciable / usefulLifeMonths);
 }
+
+export type InventoryBalanceItem = {
+  id: string;
+  sku: string;
+  name: string;
+  unit_cost: number;
+  quantityOnHand: number;
+  valueCents: number;
+};
+
+export function inventoryBalances(
+  items: { id: string; sku: string; name: string; unit_cost: number }[],
+  postings: {
+    inventory_item_id?: string | null;
+    kind: string;
+    quantity?: number | null;
+    debit: number | string;
+    credit: number | string;
+  }[],
+): InventoryBalanceItem[] {
+  const qty = new Map<string, number>();
+  const value = new Map<string, number>();
+
+  for (const item of items) {
+    qty.set(item.id, 0);
+    value.set(item.id, 0);
+  }
+
+  for (const posting of postings) {
+    if (!posting.inventory_item_id) continue;
+    const quantity = Number(posting.quantity ?? 0);
+    const debitCents = dollarsToCents(posting.debit);
+    const creditCents = dollarsToCents(posting.credit);
+    const currentQty = qty.get(posting.inventory_item_id) ?? 0;
+    const currentValue = value.get(posting.inventory_item_id) ?? 0;
+
+    if (
+      posting.kind === "purchase" ||
+      (posting.kind === "adjustment" && debitCents > 0)
+    ) {
+      qty.set(posting.inventory_item_id, currentQty + quantity);
+      value.set(posting.inventory_item_id, currentValue + debitCents);
+    } else if (
+      posting.kind === "issue" ||
+      (posting.kind === "adjustment" && creditCents > 0)
+    ) {
+      qty.set(posting.inventory_item_id, currentQty - quantity);
+      value.set(posting.inventory_item_id, currentValue - creditCents);
+    }
+  }
+
+  return items.map((item) => ({
+    ...item,
+    quantityOnHand: qty.get(item.id) ?? 0,
+    valueCents: value.get(item.id) ?? 0,
+  }));
+}
+
+export function employeeWageTotals(
+  postings: {
+    employee_id?: string | null;
+    debit: number | string;
+    credit: number | string;
+  }[],
+) {
+  const totals = new Map<string, number>();
+  for (const posting of postings) {
+    if (!posting.employee_id) continue;
+    const current = totals.get(posting.employee_id) ?? 0;
+    totals.set(
+      posting.employee_id,
+      current + dollarsToCents(posting.debit) - dollarsToCents(posting.credit),
+    );
+  }
+  return totals;
+}
+
+export function cashBookSignedCents(posting: {
+  debit: number | string;
+  credit: number | string;
+}) {
+  return dollarsToCents(posting.debit) - dollarsToCents(posting.credit);
+}

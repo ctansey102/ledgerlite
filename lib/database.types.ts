@@ -21,9 +21,28 @@ export type SubledgerKind =
   | "disbursement"
   | "acquisition"
   | "depreciation"
-  | "disposal";
-export type AccountSubledger = "ar" | "ap" | "fa" | "fa_accum";
-export type JournalSource = "manual" | "ar" | "ap" | "fa";
+  | "disposal"
+  | "purchase"
+  | "issue"
+  | "adjustment"
+  | "receipt"
+  | "wage";
+export type AccountSubledger =
+  | "ar"
+  | "ap"
+  | "fa"
+  | "fa_accum"
+  | "inv"
+  | "cash"
+  | "payroll";
+export type JournalSource =
+  | "manual"
+  | "ar"
+  | "ap"
+  | "fa"
+  | "inv"
+  | "cash"
+  | "payroll";
 
 export type Database = {
   __InternalSupabase: {
@@ -141,6 +160,79 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "vendors_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      inventory_items: {
+        Row: {
+          created_at: string;
+          id: string;
+          name: string;
+          notes: string | null;
+          sku: string;
+          unit_cost: number;
+          user_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          id?: string;
+          name: string;
+          notes?: string | null;
+          sku: string;
+          unit_cost?: number;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          id?: string;
+          name?: string;
+          notes?: string | null;
+          sku?: string;
+          unit_cost?: number;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "inventory_items_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      employees: {
+        Row: {
+          created_at: string;
+          email: string | null;
+          id: string;
+          name: string;
+          notes: string | null;
+          user_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          email?: string | null;
+          id?: string;
+          name: string;
+          notes?: string | null;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          email?: string | null;
+          id?: string;
+          name?: string;
+          notes?: string | null;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "employees_user_id_fkey";
             columns: ["user_id"];
             isOneToOne: false;
             referencedRelation: "profiles";
@@ -303,10 +395,13 @@ export type Database = {
           customer_id: string | null;
           debit: number;
           description: string;
+          employee_id: string | null;
           id: string;
+          inventory_item_id: string | null;
           journal_entry_id: string;
           kind: string;
           posting_date: string;
+          quantity: number | null;
           subledger: string;
           user_id: string;
           vendor_id: string | null;
@@ -318,10 +413,13 @@ export type Database = {
           customer_id?: string | null;
           debit?: number;
           description: string;
+          employee_id?: string | null;
           id?: string;
+          inventory_item_id?: string | null;
           journal_entry_id: string;
           kind: string;
           posting_date: string;
+          quantity?: number | null;
           subledger: string;
           user_id: string;
           vendor_id?: string | null;
@@ -333,10 +431,13 @@ export type Database = {
           customer_id?: string | null;
           debit?: number;
           description?: string;
+          employee_id?: string | null;
           id?: string;
+          inventory_item_id?: string | null;
           journal_entry_id?: string;
           kind?: string;
           posting_date?: string;
+          quantity?: number | null;
           subledger?: string;
           user_id?: string;
           vendor_id?: string | null;
@@ -354,6 +455,20 @@ export type Database = {
             columns: ["customer_id"];
             isOneToOne: false;
             referencedRelation: "customers";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "subledger_postings_employee_id_fkey";
+            columns: ["employee_id"];
+            isOneToOne: false;
+            referencedRelation: "employees";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "subledger_postings_inventory_item_id_fkey";
+            columns: ["inventory_item_id"];
+            isOneToOne: false;
+            referencedRelation: "inventory_items";
             referencedColumns: ["id"];
           },
           {
@@ -420,6 +535,8 @@ export type Account = Database["public"]["Tables"]["accounts"]["Row"];
 export type Customer = Database["public"]["Tables"]["customers"]["Row"];
 export type Vendor = Database["public"]["Tables"]["vendors"]["Row"];
 export type FixedAsset = Database["public"]["Tables"]["fixed_assets"]["Row"];
+export type InventoryItem = Database["public"]["Tables"]["inventory_items"]["Row"];
+export type Employee = Database["public"]["Tables"]["employees"]["Row"];
 export type JournalEntry = Database["public"]["Tables"]["journal_entries"]["Row"];
 export type JournalLine = Database["public"]["Tables"]["journal_lines"]["Row"];
 export type SubledgerPosting =
