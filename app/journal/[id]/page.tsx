@@ -38,6 +38,9 @@ export default async function JournalDetailPage({
           <p className="mt-3 text-muted">
             Entered by {entry.enterer?.display_name ?? "you"} ·{" "}
             {new Date(entry.created_at).toLocaleString()}
+            {entry.source && entry.source !== "manual"
+              ? ` · From ${entry.source.toUpperCase()} subledger${entry.source_kind ? ` (${entry.source_kind})` : ""}`
+              : ""}
           </p>
         </div>
         <form action={deleteJournalEntry}>

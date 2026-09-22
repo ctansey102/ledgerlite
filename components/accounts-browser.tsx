@@ -118,6 +118,11 @@ export function AccountsBrowser({ rows }: { rows: Row[] }) {
                           <Link href={`/accounts/${row.account.id}`} className="hover:text-forest">
                             <span className="mr-3 text-muted">{row.account.code}</span>
                             {row.account.name}
+                            {row.account.subledger ? (
+                              <span className="ml-2 text-xs uppercase tracking-wide text-gold">
+                                {row.account.subledger.replace("_", " ")} control
+                              </span>
+                            ) : null}
                           </Link>
                         </td>
                         <td className="money px-4 py-3 text-right">
