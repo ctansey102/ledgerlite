@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { deleteSubledgerRecord } from "@/app/actions/subledgers";
 import { AppShell } from "@/components/app-shell";
+import { ConfirmDeleteForm } from "@/components/confirm-delete-form";
 import {
   getProfile,
   getSubledgerPostings,
@@ -32,26 +34,45 @@ export default async function ApVendorPage({
       return a.posting_date.localeCompare(b.posting_date);
     });
 
-  let running = 0;
-  const withBalance = rows.map((row) => {
-    running += partySignedBalance(
-      "ap",
-      dollarsToCents(row.debit),
-      dollarsToCents(row.credit),
-    );
-    return { ...row, running };
-  });
+  const withBalance = rows.reduce<
+    Array<(typeof rows)[number] & { running: number }>
+  >((list, row) => {
+    const previous = list.at(-1)?.running ?? 0;
+    list.push({
+      ...row,
+      running:
+        previous +
+        partySignedBalance(
+          "ap",
+          dollarsToCents(row.debit),
+          dollarsToCents(row.credit),
+        ),
+    });
+    return list;
+  }, []);
+  const running = withBalance.at(-1)?.running ?? 0;
 
   return (
     <AppShell name={profile?.display_name ?? "Bookkeeper"} role={profile?.role}>
       <Link href="/subledgers/ap" className="text-sm text-forest hover:underline">
         Back to AP
       </Link>
-      <p className="mt-4 text-sm uppercase tracking-[0.16em] text-gold">
-        Vendor ledger
-      </p>
-      <h1 className="font-serif text-4xl">{vendor.name}</h1>
-      <p className="money mt-3 font-serif text-3xl">{formatMoney(running)}</p>
+      <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm uppercase tracking-[0.16em] text-gold">
+            Vendor ledger
+          </p>
+          <h1 className="font-serif text-4xl">{vendor.name}</h1>
+          <p className="money mt-3 font-serif text-3xl">{formatMoney(running)}</p>
+        </div>
+        <ConfirmDeleteForm
+          action={deleteSubledgerRecord}
+          fields={{ kind: "vendor", id: vendor.id }}
+          label={`Delete ${vendor.name}`}
+          variant="button"
+          message={`Delete ${vendor.name} and the journal entries posted to them? The general ledger and cash book are updated with those entries.`}
+        />
+      </div>
 
       {withBalance.length === 0 ? (
         <p className="mt-8 rounded-3xl border border-dashed border-line bg-paper px-5 py-10 text-center text-muted">

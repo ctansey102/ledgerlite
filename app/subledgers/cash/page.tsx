@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { recordCashMovement } from "@/app/actions/subledgers";
+import { deleteCashMovement, recordCashMovement } from "@/app/actions/subledgers";
 import { AppShell } from "@/components/app-shell";
+import { ConfirmDeleteForm } from "@/components/confirm-delete-form";
 import { Notice } from "@/components/notice";
 import {
   flattenLedgerLines,
@@ -63,6 +64,11 @@ export default async function CashPage({
     return rows;
   }, []);
   const displayRows = [...withRunning].reverse();
+  const bookBalance = chronological.reduce(
+    (sum, posting) => sum + cashBookSignedCents(posting),
+    0,
+  );
+  const tied = bookBalance === cashBalance;
 
   return (
     <AppShell name={profile?.display_name ?? "Bookkeeper"} role={profile?.role}>
@@ -73,13 +79,19 @@ export default async function CashPage({
           </p>
           <h1 className="mt-1 font-serif text-4xl text-ink">Cash book</h1>
           <p className="mt-2 max-w-2xl text-muted">
-            Record receipts and disbursements here. Each movement posts a
-            balanced journal entry against Cash and the other account you choose.
+            Receipts and payments land here, including collections and
+            disbursements posted from the other subledgers. Each one updates
+            Cash in the general ledger and the statement of cash flows.
           </p>
         </div>
         <div className="text-right">
           <p className="text-sm text-muted">Cash on hand</p>
           <p className="money font-serif text-3xl">{formatMoney(cashBalance)}</p>
+          <p
+            className={`mt-1 text-sm ${tied ? "text-forest-dark" : "text-danger"}`}
+          >
+            {tied ? "Cash book ties to the GL" : "Out of balance"}
+          </p>
           {cash ? (
             <Link
               href={`/accounts/${cash.id}`}
@@ -258,12 +270,20 @@ export default async function CashPage({
                       {formatMoney(row.running)}
                     </td>
                     <td className="px-4 py-3">
-                      <Link
-                        href={`/journal/${row.journal_entry_id}`}
-                        className="text-forest hover:underline"
-                      >
-                        View
-                      </Link>
+                      <div className="flex items-center gap-3">
+                        <Link
+                          href={`/journal/${row.journal_entry_id}`}
+                          className="text-forest hover:underline"
+                        >
+                          View
+                        </Link>
+                        <ConfirmDeleteForm
+                          action={deleteCashMovement}
+                          fields={{ id: row.journal_entry_id }}
+                          label={`Delete ${row.description}`}
+                          message="Delete this cash movement and its journal entry? If it came from another subledger, that posting is removed too so the books stay in balance."
+                        />
+                      </div>
                     </td>
                   </tr>
                 ))}

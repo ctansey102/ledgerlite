@@ -1,9 +1,11 @@
 import Link from "next/link";
 import {
   createEmployee,
+  deleteSubledgerRecord,
   recordWagePayment,
 } from "@/app/actions/subledgers";
 import { AppShell } from "@/components/app-shell";
+import { ConfirmDeleteForm } from "@/components/confirm-delete-form";
 import { Notice } from "@/components/notice";
 import {
   getAccounts,
@@ -46,8 +48,8 @@ export default async function PayrollPage({
           </p>
           <h1 className="mt-1 font-serif text-4xl text-ink">Payroll</h1>
           <p className="mt-2 max-w-2xl text-muted">
-            Keep wages by employee. Each payment debits Wages Expense and
-            credits Cash, then lands in the payroll subledger.
+            Keep wages by employee. Each payment debits Wages Expense, credits
+            Cash, and posts the disbursement to the cash book.
           </p>
         </div>
         <div className="text-right">
@@ -82,6 +84,9 @@ export default async function PayrollPage({
                   <tr>
                     <th className="px-4 py-3 font-medium">Name</th>
                     <th className="px-4 py-3 text-right font-medium">Paid</th>
+                    <th className="px-4 py-3 text-right font-medium">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -95,6 +100,14 @@ export default async function PayrollPage({
                       </td>
                       <td className="money px-4 py-3 text-right">
                         {formatMoney(wageTotals.get(employee.id) ?? 0)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <ConfirmDeleteForm
+                          action={deleteSubledgerRecord}
+                          fields={{ kind: "employee", id: employee.id }}
+                          label={`Delete ${employee.name}`}
+                          message={`Delete ${employee.name} and the wage payments posted to them? Cash is updated with those entries.`}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -128,7 +141,8 @@ export default async function PayrollPage({
         >
           <h2 className="font-serif text-2xl">Record wage payment</h2>
           <p className="mt-1 text-sm text-muted">
-            Debit Wages Expense, credit Cash.
+            Debit Wages Expense, credit Cash, and record the disbursement in
+            the cash book.
           </p>
           <div className="mt-4 grid gap-3">
             <select

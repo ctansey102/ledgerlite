@@ -1,10 +1,12 @@
 import Link from "next/link";
 import {
   createInventoryItem,
+  deleteSubledgerRecord,
   recordInventoryIssue,
   recordInventoryPurchase,
 } from "@/app/actions/subledgers";
 import { AppShell } from "@/components/app-shell";
+import { ConfirmDeleteForm } from "@/components/confirm-delete-form";
 import { Notice } from "@/components/notice";
 import {
   getAccounts,
@@ -46,7 +48,8 @@ export default async function InventoryPage({
           <h1 className="mt-1 font-serif text-4xl text-ink">Inventory</h1>
           <p className="mt-2 max-w-2xl text-muted">
             Track stock by item. Purchases and issues post to the Inventory
-            control account and the general ledger automatically.
+            control account. A purchase paid from Cash also posts to the cash
+            book.
           </p>
         </div>
         <div className="text-right">
@@ -84,6 +87,9 @@ export default async function InventoryPage({
                   <th className="px-4 py-3 text-right font-medium">On hand</th>
                   <th className="px-4 py-3 text-right font-medium">Unit cost</th>
                   <th className="px-4 py-3 text-right font-medium">Value</th>
+                  <th className="px-4 py-3 text-right font-medium">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -99,6 +105,14 @@ export default async function InventoryPage({
                     </td>
                     <td className="money px-4 py-3 text-right">
                       {formatMoney(item.valueCents)}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <ConfirmDeleteForm
+                        action={deleteSubledgerRecord}
+                        fields={{ kind: "item", id: item.id }}
+                        label={`Delete ${item.name}`}
+                        message={`Delete ${item.sku} ${item.name} and the inventory journal entries posted to it? Cash is updated when those purchases were paid in cash.`}
+                      />
                     </td>
                   </tr>
                 ))}

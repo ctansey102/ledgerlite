@@ -6,6 +6,7 @@ import { ensureControlAccounts } from "@/lib/control-accounts";
 import { requireUser } from "@/lib/data";
 import { dollarsToCents } from "@/lib/money";
 import { postBalancedEntry } from "@/lib/posting";
+import { revalidateBooks } from "@/lib/revalidate-books";
 import { monthlyDepreciationCents } from "@/lib/subledgers";
 import { createClient } from "@/lib/supabase/server";
 
@@ -13,22 +14,150 @@ function asString(value: FormDataEntryValue | null) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function revalidateBooks() {
-  revalidatePath("/dashboard");
-  revalidatePath("/journal");
-  revalidatePath("/accounts");
-  revalidatePath("/statements");
-  revalidatePath("/subledgers");
-  revalidatePath("/subledgers/ar");
-  revalidatePath("/subledgers/ap");
-  revalidatePath("/subledgers/fa");
-  revalidatePath("/subledgers/cash");
-  revalidatePath("/subledgers/inventory");
-  revalidatePath("/subledgers/payroll");
+const partyDelete = {
+  customer: {
+    table: "customers",
+    column: "customer_id",
+    path: "/subledgers/ar",
+  },
+  vendor: {
+    table: "vendors",
+    column: "vendor_id",
+    path: "/subledgers/ap",
+  },
+  asset: {
+    table: "fixed_assets",
+    column: "asset_id",
+    path: "/subledgers/fa",
+  },
+  item: {
+    table: "inventory_items",
+    column: "inventory_item_id",
+    path: "/subledgers/inventory",
+  },
+  employee: {
+    table: "employees",
+    column: "employee_id",
+    path: "/subledgers/payroll",
+  },
+} as const;
+
+type PartyKind = keyof typeof partyDelete;
+
+/** Removes a subledger record and the journal entries posted to it. */
+export async function deleteSubledgerRecord(formData: FormData) {
+  const user = await requireUser();
+  const supabase = await createClient();
+  const kind = asString(formData.get("kind")) as PartyKind;
+  const spec = partyDelete[kind];
+  const id = asString(formData.get("id"));
+
+  if (!spec || !id) fail("/subledgers", "Choose a record to delete.");
+
+  const { data: owned, error: ownedError } = await supabase
+    .from(spec.table)
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("id", id)
+    .maybeSingle();
+
+  if (ownedError) fail(spec.path, ownedError.message);
+  if (!owned) fail(spec.path, "That record was not found.");
+
+  const { data: postings, error: postingError } = await supabase
+    .from("subledger_postings")
+    .select("journal_entry_id")
+    .eq("user_id", user.id)
+    .eq(spec.column, id);
+
+  if (postingError) fail(spec.path, postingError.message);
+
+  const entryIds = [
+    ...new Set((postings ?? []).map((posting) => posting.journal_entry_id)),
+  ];
+
+  if (entryIds.length > 0) {
+    const removed = await removeJournalEntries(supabase, user.id, entryIds);
+    if (removed) fail(spec.path, removed);
+  }
+
+  const { error } = await supabase
+    .from(spec.table)
+    .delete()
+    .eq("user_id", user.id)
+    .eq("id", id);
+
+  if (error) fail(spec.path, error.message);
+
+  revalidateBooks();
+  redirect(spec.path);
+}
+
+/** Removes a cash-book movement by deleting its journal entry. */
+export async function deleteCashMovement(formData: FormData) {
+  const user = await requireUser();
+  const supabase = await createClient();
+  const id = asString(formData.get("id"));
+  if (!id) fail("/subledgers/cash", "Choose a cash movement to delete.");
+
+  const { data: posting, error: postingError } = await supabase
+    .from("subledger_postings")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("journal_entry_id", id)
+    .eq("subledger", "cash")
+    .limit(1);
+
+  if (postingError) fail("/subledgers/cash", postingError.message);
+  if (!posting || posting.length === 0) {
+    fail("/subledgers/cash", "That cash movement was not found.");
+  }
+
+  const removed = await removeJournalEntries(supabase, user.id, [id]);
+  if (removed) fail("/subledgers/cash", removed);
+
+  revalidateBooks();
+  redirect("/subledgers/cash");
 }
 
 function fail(path: string, message: string): never {
   redirect(`${path}?error=${encodeURIComponent(message)}`);
+}
+
+async function removeJournalEntries(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  entryIds: string[],
+) {
+  const { error: entryError } = await supabase
+    .from("journal_entries")
+    .delete()
+    .eq("user_id", userId)
+    .in("id", entryIds);
+
+  if (!entryError) return null;
+  if (entryError.code !== "23503") return entryError.message;
+
+  const { error: subError } = await supabase
+    .from("subledger_postings")
+    .delete()
+    .eq("user_id", userId)
+    .in("journal_entry_id", entryIds);
+  if (subError) return subError.message;
+
+  const { error: lineError } = await supabase
+    .from("journal_lines")
+    .delete()
+    .eq("user_id", userId)
+    .in("entry_id", entryIds);
+  if (lineError) return lineError.message;
+
+  const { error: retryError } = await supabase
+    .from("journal_entries")
+    .delete()
+    .eq("user_id", userId)
+    .in("id", entryIds);
+  return retryError?.message ?? null;
 }
 
 export async function ensureSubledgerAccountsAction() {

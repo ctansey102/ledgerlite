@@ -1,10 +1,12 @@
 import Link from "next/link";
 import {
   createVendor,
+  deleteSubledgerRecord,
   postApBill,
   postApPayment,
 } from "@/app/actions/subledgers";
 import { AppShell } from "@/components/app-shell";
+import { ConfirmDeleteForm } from "@/components/confirm-delete-form";
 import { Notice } from "@/components/notice";
 import { controlAccountFor } from "@/lib/control-accounts";
 import {
@@ -63,8 +65,9 @@ export default async function ApSubledgerPage({
       </Link>
       <h1 className="mt-4 font-serif text-4xl">Accounts payable</h1>
       <p className="mt-2 max-w-2xl text-muted">
-        Bills credit the vendor and the AP control account; payments debit both.
-        Open a vendor for their detail ledger.
+        Bills credit the vendor and the AP control account. Payments debit both
+        and post the cash disbursement to the cash book. Open a vendor for
+        their detail ledger.
       </p>
       <Notice message={error} />
 
@@ -102,6 +105,9 @@ export default async function ApSubledgerPage({
                 <tr>
                   <th className="pb-2 font-medium">Name</th>
                   <th className="pb-2 text-right font-medium">Balance</th>
+                  <th className="pb-2 text-right font-medium">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -117,6 +123,14 @@ export default async function ApSubledgerPage({
                     </td>
                     <td className="money py-3 text-right">
                       {formatMoney(balances.get(vendor.id)?.signed ?? 0)}
+                    </td>
+                    <td className="py-3 text-right">
+                      <ConfirmDeleteForm
+                        action={deleteSubledgerRecord}
+                        fields={{ kind: "vendor", id: vendor.id }}
+                        label={`Delete ${vendor.name}`}
+                        message={`Delete ${vendor.name} and the journal entries posted to them? The general ledger and cash book are updated with those entries.`}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -220,7 +234,8 @@ export default async function ApSubledgerPage({
           >
             <h2 className="font-serif text-2xl">Record payment</h2>
             <p className="mt-1 text-sm text-muted">
-              Dr Accounts Payable · Cr Cash
+              Dr Accounts Payable · Cr Cash. The payment is added to the cash
+              book and the statement of cash flows.
             </p>
             <div className="mt-4 grid gap-3">
               <select

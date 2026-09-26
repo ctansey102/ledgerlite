@@ -129,6 +129,30 @@ async function findOrCreateAccount(
 ) {
   const supabase = await createClient();
 
+  async function adopt(account: Account) {
+    const patch: {
+      subledger?: SubledgerKey;
+      cash_flow_section?: string;
+    } = {};
+    if (draft.subledger && !account.subledger) {
+      patch.subledger = draft.subledger;
+    }
+    if (draft.cash_flow_section && !account.cash_flow_section) {
+      patch.cash_flow_section = draft.cash_flow_section;
+    }
+    if (Object.keys(patch).length === 0) return account;
+
+    const { data: updated, error } = await supabase
+      .from("accounts")
+      .update(patch)
+      .eq("id", account.id)
+      .eq("user_id", userId)
+      .select("*")
+      .single();
+    if (error || !updated) throw error ?? new Error("Could not update account");
+    return updated as Account;
+  }
+
   if (draft.subledger) {
     const { data: bySubledger } = await supabase
       .from("accounts")
@@ -136,7 +160,7 @@ async function findOrCreateAccount(
       .eq("user_id", userId)
       .eq("subledger", draft.subledger)
       .maybeSingle();
-    if (bySubledger) return bySubledger as Account;
+    if (bySubledger) return adopt(bySubledger as Account);
   }
 
   const { data: byCode } = await supabase
@@ -146,20 +170,7 @@ async function findOrCreateAccount(
     .eq("code", draft.code)
     .maybeSingle();
 
-  if (byCode) {
-    if (draft.subledger && !(byCode as Account & { subledger?: string | null }).subledger) {
-      const { data: updated, error } = await supabase
-        .from("accounts")
-        .update({ subledger: draft.subledger })
-        .eq("id", byCode.id)
-        .eq("user_id", userId)
-        .select("*")
-        .single();
-      if (error) throw error;
-      return updated as Account;
-    }
-    return byCode as Account;
-  }
+  if (byCode) return adopt(byCode as Account);
 
   const { data: byName } = await supabase
     .from("accounts")
@@ -168,20 +179,7 @@ async function findOrCreateAccount(
     .ilike("name", draft.name)
     .maybeSingle();
 
-  if (byName) {
-    if (draft.subledger && !(byName as Account & { subledger?: string | null }).subledger) {
-      const { data: updated, error } = await supabase
-        .from("accounts")
-        .update({ subledger: draft.subledger })
-        .eq("id", byName.id)
-        .eq("user_id", userId)
-        .select("*")
-        .single();
-      if (error) throw error;
-      return updated as Account;
-    }
-    return byName as Account;
-  }
+  if (byName) return adopt(byName as Account);
 
   const { data: created, error } = await supabase
     .from("accounts")

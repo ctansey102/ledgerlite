@@ -5,6 +5,8 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/data";
 import { dollarsToCents } from "@/lib/money";
+import { attachMissingCashPostings } from "@/lib/posting";
+import { revalidateBooks } from "@/lib/revalidate-books";
 
 function asString(value: FormDataEntryValue | null) {
   return typeof value === "string" ? value.trim() : "";
@@ -79,11 +81,24 @@ export async function createJournalEntry(formData: FormData) {
     redirect(`/journal/new?error=${encodeURIComponent(lineError.message)}`);
   }
 
-  revalidatePath("/dashboard");
-  revalidatePath("/journal");
-  revalidatePath("/accounts");
-  revalidatePath("/statements");
-  revalidatePath("/subledgers");
+  try {
+    await attachMissingCashPostings({
+      userId: user.id,
+      entryId: entry.id,
+      entryDate,
+      description,
+      lines,
+    });
+  } catch (error) {
+    await supabase.from("subledger_postings").delete().eq("journal_entry_id", entry.id);
+    await supabase.from("journal_lines").delete().eq("entry_id", entry.id);
+    await supabase.from("journal_entries").delete().eq("id", entry.id);
+    redirect(
+      `/journal/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Could not update the cash book.")}`,
+    );
+  }
+
+  revalidateBooks();
   redirect(`/journal/${entry.id}`);
 }
 
@@ -94,14 +109,15 @@ export async function deleteJournalEntry(formData: FormData) {
 
   if (!id) redirect("/journal");
 
+  await supabase
+    .from("subledger_postings")
+    .delete()
+    .eq("journal_entry_id", id)
+    .eq("user_id", user.id);
   await supabase.from("journal_lines").delete().eq("entry_id", id).eq("user_id", user.id);
   await supabase.from("journal_entries").delete().eq("id", id).eq("user_id", user.id);
 
-  revalidatePath("/dashboard");
-  revalidatePath("/journal");
-  revalidatePath("/accounts");
-  revalidatePath("/statements");
-  revalidatePath("/subledgers");
+  revalidateBooks();
   redirect("/journal");
 }
 

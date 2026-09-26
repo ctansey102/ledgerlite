@@ -1,9 +1,11 @@
 import Link from "next/link";
 import {
   acquireFixedAsset,
+  deleteSubledgerRecord,
   postFaDepreciation,
 } from "@/app/actions/subledgers";
 import { AppShell } from "@/components/app-shell";
+import { ConfirmDeleteForm } from "@/components/confirm-delete-form";
 import { Notice } from "@/components/notice";
 import { controlAccountFor } from "@/lib/control-accounts";
 import {
@@ -93,9 +95,10 @@ export default async function FaSubledgerPage({
       </Link>
       <h1 className="mt-4 font-serif text-4xl">Fixed assets</h1>
       <p className="mt-2 max-w-2xl text-muted">
-        Acquisitions debit the equipment control account. Monthly depreciation
-        hits expense and accumulated depreciation. Subledger balances are net
-        book value.
+        Acquisitions debit the equipment control account. Paying cash also
+        posts a disbursement to the cash book. Monthly depreciation hits
+        expense and accumulated depreciation. Subledger balances are net book
+        value.
       </p>
       <Notice message={error} />
 
@@ -132,6 +135,9 @@ export default async function FaSubledgerPage({
                   <th className="pb-2 font-medium">Asset</th>
                   <th className="pb-2 text-right font-medium">Cost</th>
                   <th className="pb-2 text-right font-medium">NBV</th>
+                  <th className="pb-2 text-right font-medium">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -152,6 +158,14 @@ export default async function FaSubledgerPage({
                       {formatMoney(dollarsToCents(asset.cost))}
                     </td>
                     <td className="money py-3 text-right">{formatMoney(net)}</td>
+                    <td className="py-3 text-right">
+                      <ConfirmDeleteForm
+                        action={deleteSubledgerRecord}
+                        fields={{ kind: "asset", id: asset.id }}
+                        label={`Delete ${asset.name}`}
+                        message={`Delete ${asset.name} and the journal entries posted to it, including depreciation and any cash or payable lines on those entries?`}
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>

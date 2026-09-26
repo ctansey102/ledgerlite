@@ -1,10 +1,12 @@
 import Link from "next/link";
 import {
   createCustomer,
+  deleteSubledgerRecord,
   postArInvoice,
   postArPayment,
 } from "@/app/actions/subledgers";
 import { AppShell } from "@/components/app-shell";
+import { ConfirmDeleteForm } from "@/components/confirm-delete-form";
 import { Notice } from "@/components/notice";
 import { controlAccountFor } from "@/lib/control-accounts";
 import {
@@ -62,8 +64,9 @@ export default async function ArSubledgerPage({
       </Link>
       <h1 className="mt-4 font-serif text-4xl">Accounts receivable</h1>
       <p className="mt-2 max-w-2xl text-muted">
-        Invoices debit the customer and the AR control account; payments credit
-        both. Open a customer to see their detail ledger.
+        Invoices debit the customer and the AR control account. Payments credit
+        both and post the cash receipt to the cash book. Open a customer to see
+        their detail ledger.
       </p>
       <Notice message={error} />
 
@@ -101,6 +104,9 @@ export default async function ArSubledgerPage({
                 <tr>
                   <th className="pb-2 font-medium">Name</th>
                   <th className="pb-2 text-right font-medium">Balance</th>
+                  <th className="pb-2 text-right font-medium">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -116,6 +122,14 @@ export default async function ArSubledgerPage({
                     </td>
                     <td className="money py-3 text-right">
                       {formatMoney(balances.get(customer.id)?.signed ?? 0)}
+                    </td>
+                    <td className="py-3 text-right">
+                      <ConfirmDeleteForm
+                        action={deleteSubledgerRecord}
+                        fields={{ kind: "customer", id: customer.id }}
+                        label={`Delete ${customer.name}`}
+                        message={`Delete ${customer.name} and the journal entries posted to them? The general ledger and cash book are updated with those entries.`}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -215,7 +229,8 @@ export default async function ArSubledgerPage({
           >
             <h2 className="font-serif text-2xl">Record payment</h2>
             <p className="mt-1 text-sm text-muted">
-              Dr Cash · Cr Accounts Receivable
+              Dr Cash · Cr Accounts Receivable. The receipt is added to the cash
+              book and the statement of cash flows.
             </p>
             <div className="mt-4 grid gap-3">
               <select

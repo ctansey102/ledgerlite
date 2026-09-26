@@ -164,7 +164,7 @@ export default async function SubledgersHubPage({
     {
       href: "/subledgers/cash",
       title: "Cash book",
-      body: "Receipts and disbursements that roll up to the Cash control account.",
+      body: "Receipts and payments from every subledger, plus cash book entries, that roll up to Cash.",
       parties: `${cashPostings.length} movement${cashPostings.length === 1 ? "" : "s"}`,
       sub: cashSub,
       gl: cashGl,

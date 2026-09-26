@@ -1,6 +1,12 @@
 import type { Account } from "@/lib/database.types";
 import { dollarsToCents } from "@/lib/money";
 
+function isCashAccount(
+  account: Pick<Account, "cash_flow_section" | "subledger">,
+) {
+  return account.cash_flow_section === "cash" || account.subledger === "cash";
+}
+
 export type LedgerLine = {
   account_id: string;
   debit: number | string;
@@ -127,7 +133,7 @@ export function buildCashFlow(
     const change = end - start;
 
     if (change === 0) continue;
-    if (row.account.cash_flow_section === "cash") continue;
+    if (isCashAccount(row.account)) continue;
     if (row.account.type === "revenue" || row.account.type === "expense") {
       continue;
     }
@@ -174,9 +180,7 @@ export function buildCashFlow(
   const netChange =
     cashFromOperations + cashFromInvesting + cashFromFinancing;
 
-  const cashAccounts = accounts.filter(
-    (account) => account.cash_flow_section === "cash",
-  );
+  const cashAccounts = accounts.filter((account) => isCashAccount(account));
   const beginningCash = cashAccounts.reduce(
     (sum, account) =>
       sum + (beginningMap.get(account.id)?.signed ?? 0),
