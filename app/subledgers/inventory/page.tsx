@@ -4,12 +4,14 @@ import {
   deleteSubledgerRecord,
   recordInventoryIssue,
   recordInventoryPurchase,
+  recordInventorySale,
 } from "@/app/actions/subledgers";
 import { AppShell } from "@/components/app-shell";
 import { ConfirmDeleteForm } from "@/components/confirm-delete-form";
 import { Notice } from "@/components/notice";
 import {
   getAccounts,
+  getCustomers,
   getInventoryItems,
   getProfile,
   getSubledgerPostings,
@@ -34,10 +36,11 @@ export default async function InventoryPage({
     searchParams,
     syncControlSubledgers(user.id),
   ]);
-  const [profile, accounts, items, postings] = await Promise.all([
+  const [profile, accounts, items, customers, postings] = await Promise.all([
     getProfile(user.id),
     getAccounts(user.id),
     getInventoryItems(user.id),
+    getCustomers(user.id).catch(() => []),
     getSubledgerPostings(user.id, "inv"),
   ]);
 
@@ -55,9 +58,9 @@ export default async function InventoryPage({
           </p>
           <h1 className="mt-1 font-serif text-4xl text-ink">Inventory</h1>
           <p className="mt-2 max-w-2xl text-muted">
-            Track stock by item. Purchases and issues post to the Inventory
-            control account. A purchase paid from Cash also posts to the cash
-            book.
+            Track stock by item. A sale debits Cash or Accounts Receivable
+            and credits Sales Revenue, and moves the item’s cost to Cost of
+            Goods Sold.
           </p>
         </div>
         <div className="text-right">
@@ -94,6 +97,7 @@ export default async function InventoryPage({
                   <th className="px-4 py-3 font-medium">Item</th>
                   <th className="px-4 py-3 text-right font-medium">On hand</th>
                   <th className="px-4 py-3 text-right font-medium">Unit cost</th>
+                  <th className="px-4 py-3 text-right font-medium">Sales price</th>
                   <th className="px-4 py-3 text-right font-medium">Value</th>
                   <th className="px-4 py-3 text-right font-medium">
                     <span className="sr-only">Actions</span>
@@ -109,7 +113,10 @@ export default async function InventoryPage({
                       {item.quantityOnHand}
                     </td>
                     <td className="money px-4 py-3 text-right">
-                      {formatMoney(Math.round(Number(item.unit_cost) * 100))}
+                      {formatMoney(dollarsToCents(item.unit_cost))}
+                    </td>
+                    <td className="money px-4 py-3 text-right">
+                      {formatMoney(dollarsToCents(item.sale_price))}
                     </td>
                     <td className="money px-4 py-3 text-right">
                       {formatMoney(item.valueCents)}
@@ -130,7 +137,7 @@ export default async function InventoryPage({
         )}
       </section>
 
-      <section className="mt-10 grid gap-6 lg:grid-cols-3">
+      <section className="mt-10 grid gap-6 lg:grid-cols-2">
         <details open className="rounded-3xl border border-line bg-paper p-5">
           <summary className="cursor-pointer font-medium">Add item</summary>
           <form action={createInventoryItem} className="mt-4 grid gap-3">
@@ -150,6 +157,13 @@ export default async function InventoryPage({
               name="unit_cost"
               inputMode="decimal"
               placeholder="Unit cost"
+              defaultValue="0.00"
+              className="money rounded-2xl border border-line px-4 py-3 outline-none focus:border-forest"
+            />
+            <input
+              name="sale_price"
+              inputMode="decimal"
+              placeholder="Sales price"
               defaultValue="0.00"
               className="money rounded-2xl border border-line px-4 py-3 outline-none focus:border-forest"
             />
@@ -232,6 +246,82 @@ export default async function InventoryPage({
             />
             <button className="rounded-full bg-forest px-5 py-3 text-sm font-medium text-white">
               Post purchase
+            </button>
+          </form>
+        </details>
+
+        <details open className="rounded-3xl border border-line bg-paper p-5">
+          <summary className="cursor-pointer font-medium">Record sale</summary>
+          <form action={recordInventorySale} className="mt-4 grid gap-3">
+            <p className="text-sm text-muted">
+              Debit Cash or Accounts Receivable and credit Sales Revenue for
+              the sales price. The item’s cost is moved to Cost of Goods Sold.
+            </p>
+            <select
+              name="item_id"
+              required
+              className="rounded-2xl border border-line px-4 py-3 outline-none focus:border-forest"
+              defaultValue=""
+            >
+              <option value="" disabled>
+                Choose item
+              </option>
+              {items.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.sku} · {item.name}
+                  {dollarsToCents(item.sale_price) > 0
+                    ? ` · ${formatMoney(dollarsToCents(item.sale_price))}`
+                    : ""}
+                </option>
+              ))}
+            </select>
+            <input
+              type="date"
+              name="entry_date"
+              required
+              defaultValue={todayISO()}
+              className="rounded-2xl border border-line px-4 py-3 outline-none focus:border-forest"
+            />
+            <input
+              name="quantity"
+              inputMode="decimal"
+              placeholder="Quantity"
+              required
+              className="money rounded-2xl border border-line px-4 py-3 outline-none focus:border-forest"
+            />
+            <input
+              name="sale_price"
+              inputMode="decimal"
+              placeholder="Sales price (uses the item price if blank)"
+              className="money rounded-2xl border border-line px-4 py-3 outline-none focus:border-forest"
+            />
+            <select
+              name="collect_from"
+              defaultValue="cash"
+              className="rounded-2xl border border-line px-4 py-3 outline-none focus:border-forest"
+            >
+              <option value="cash">Collect cash</option>
+              <option value="ar">Sell on account (AR)</option>
+            </select>
+            <select
+              name="customer_id"
+              className="rounded-2xl border border-line px-4 py-3 outline-none focus:border-forest"
+              defaultValue=""
+            >
+              <option value="">Customer (required on account)</option>
+              {customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>
+                  {customer.name}
+                </option>
+              ))}
+            </select>
+            <input
+              name="description"
+              placeholder="Sold mulch to a client"
+              className="rounded-2xl border border-line px-4 py-3 outline-none focus:border-forest"
+            />
+            <button className="rounded-full bg-forest px-5 py-3 text-sm font-medium text-white">
+              Post sale
             </button>
           </form>
         </details>

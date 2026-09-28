@@ -24,6 +24,7 @@ export type SubledgerKind =
   | "disposal"
   | "purchase"
   | "issue"
+  | "sale"
   | "adjustment"
   | "receipt"
   | "wage";
@@ -173,6 +174,7 @@ export type Database = {
           id: string;
           name: string;
           notes: string | null;
+          sale_price: number;
           sku: string;
           unit_cost: number;
           user_id: string;
@@ -182,6 +184,7 @@ export type Database = {
           id?: string;
           name: string;
           notes?: string | null;
+          sale_price?: number;
           sku: string;
           unit_cost?: number;
           user_id: string;
@@ -191,6 +194,7 @@ export type Database = {
           id?: string;
           name?: string;
           notes?: string | null;
+          sale_price?: number;
           sku?: string;
           unit_cost?: number;
           user_id?: string;

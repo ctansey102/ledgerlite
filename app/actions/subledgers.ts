@@ -2,12 +2,15 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { ensureControlAccounts } from "@/lib/control-accounts";
+import {
+  ensureControlAccounts,
+  ensureSalesRevenueAccount,
+} from "@/lib/control-accounts";
 import { requireUser } from "@/lib/data";
 import { dollarsToCents } from "@/lib/money";
-import { postBalancedEntry } from "@/lib/posting";
+import { postBalancedEntry, type SubledgerPostingInput } from "@/lib/posting";
 import { revalidateBooks } from "@/lib/revalidate-books";
-import { monthlyDepreciationCents } from "@/lib/subledgers";
+import { inventoryBalances, monthlyDepreciationCents } from "@/lib/subledgers";
 import { createClient } from "@/lib/supabase/server";
 
 function asString(value: FormDataEntryValue | null) {
@@ -654,6 +657,7 @@ export async function createInventoryItem(formData: FormData) {
   const sku = asString(formData.get("sku"));
   const name = asString(formData.get("name"));
   const unitCost = dollarsToCents(asString(formData.get("unit_cost")));
+  const salePrice = dollarsToCents(asString(formData.get("sale_price")));
 
   if (!sku || !name) fail("/subledgers/inventory", "Add a SKU and item name.");
 
@@ -662,6 +666,7 @@ export async function createInventoryItem(formData: FormData) {
     sku,
     name,
     unit_cost: unitCost / 100,
+    sale_price: salePrice / 100,
   });
 
   if (error) fail("/subledgers/inventory", error.message);
@@ -806,6 +811,147 @@ export async function recordInventoryIssue(formData: FormData) {
     fail(
       "/subledgers/inventory",
       err instanceof Error ? err.message : "Could not issue inventory.",
+    );
+  }
+
+  revalidateBooks();
+  redirect(`/journal/${entryId}`);
+}
+
+/** Sale: Dr Cash or AR, Cr Sales Revenue, and Dr COGS, Cr Inventory. */
+export async function recordInventorySale(formData: FormData) {
+  const user = await requireUser();
+  const itemId = asString(formData.get("item_id"));
+  const entryDate = asString(formData.get("entry_date"));
+  const quantity = Number.parseFloat(asString(formData.get("quantity")));
+  const collectFrom = asString(formData.get("collect_from")) || "cash";
+  const customerId = asString(formData.get("customer_id"));
+  const salePriceInput = asString(formData.get("sale_price"));
+  const description = asString(formData.get("description"));
+
+  if (!itemId || !entryDate || !(quantity > 0)) {
+    fail("/subledgers/inventory", "Add an item, quantity, and date to record a sale.");
+  }
+  if (collectFrom !== "cash" && collectFrom !== "ar") {
+    fail("/subledgers/inventory", "Choose cash or accounts receivable.");
+  }
+  if (collectFrom === "ar" && !customerId) {
+    fail("/subledgers/inventory", "Choose a customer when selling on account.");
+  }
+
+  const supabase = await createClient();
+  const { data: item } = await supabase
+    .from("inventory_items")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("id", itemId)
+    .maybeSingle();
+
+  if (!item) fail("/subledgers/inventory", "That inventory item was not found.");
+
+  if (collectFrom === "ar") {
+    const { data: customer } = await supabase
+      .from("customers")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("id", customerId)
+      .maybeSingle();
+    if (!customer) fail("/subledgers/inventory", "That customer was not found.");
+  }
+
+  const unitCostCents = dollarsToCents(item.unit_cost);
+  const salePriceCents = salePriceInput
+    ? dollarsToCents(salePriceInput)
+    : dollarsToCents(item.sale_price);
+  if (salePriceCents <= 0) {
+    fail("/subledgers/inventory", "Set a sales price for this item.");
+  }
+  if (unitCostCents <= 0) {
+    fail(
+      "/subledgers/inventory",
+      "Set a unit cost on the item before recording a sale.",
+    );
+  }
+
+  const { data: movements, error: movementError } = await supabase
+    .from("subledger_postings")
+    .select("inventory_item_id, kind, quantity, debit, credit")
+    .eq("user_id", user.id)
+    .eq("subledger", "inv")
+    .eq("inventory_item_id", itemId);
+  if (movementError) fail("/subledgers/inventory", movementError.message);
+
+  const onHand =
+    inventoryBalances([item], movements ?? [])[0]?.quantityOnHand ?? 0;
+  if (quantity > onHand) {
+    fail("/subledgers/inventory", "That quantity is more than you have on hand.");
+  }
+
+  const salesCents = Math.round(quantity * salePriceCents);
+  const costCents = Math.round(quantity * unitCostCents);
+  if (salesCents <= 0 || costCents <= 0) {
+    fail("/subledgers/inventory", "Enter a quantity that produces an amount.");
+  }
+
+  const saleDescription = description || `Sale of ${item.name}`;
+
+  if (salePriceInput) {
+    const { error: priceError } = await supabase
+      .from("inventory_items")
+      .update({ sale_price: salePriceCents / 100 })
+      .eq("id", itemId)
+      .eq("user_id", user.id);
+    if (priceError) fail("/subledgers/inventory", priceError.message);
+  }
+
+  let entryId: string;
+  try {
+    const controls = await ensureControlAccounts(user.id);
+    const revenue = await ensureSalesRevenueAccount(user.id);
+    const debitAccountId =
+      collectFrom === "ar" ? controls.ar.id : controls.cash.id;
+    const subledgerPostings: SubledgerPostingInput[] = [
+      {
+        subledger: "inv",
+        kind: "sale",
+        postingDate: entryDate,
+        description: saleDescription,
+        debitCents: 0,
+        creditCents: costCents,
+        inventoryItemId: itemId,
+        quantity,
+      },
+    ];
+    if (collectFrom === "ar") {
+      subledgerPostings.push({
+        subledger: "ar",
+        kind: "invoice",
+        postingDate: entryDate,
+        description: saleDescription,
+        debitCents: salesCents,
+        creditCents: 0,
+        customerId,
+      });
+    }
+
+    entryId = await postBalancedEntry({
+      userId: user.id,
+      entryDate,
+      description: saleDescription,
+      source: "inv",
+      sourceKind: "sale",
+      glLines: [
+        { accountId: debitAccountId, debitCents: salesCents, creditCents: 0 },
+        { accountId: controls.cogs.id, debitCents: costCents, creditCents: 0 },
+        { accountId: revenue.id, debitCents: 0, creditCents: salesCents },
+        { accountId: controls.inv.id, debitCents: 0, creditCents: costCents },
+      ],
+      subledgerPostings,
+    });
+  } catch (err) {
+    fail(
+      "/subledgers/inventory",
+      err instanceof Error ? err.message : "Could not record the sale.",
     );
   }
 

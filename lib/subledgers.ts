@@ -89,12 +89,19 @@ export type InventoryBalanceItem = {
   sku: string;
   name: string;
   unit_cost: number;
+  sale_price: number;
   quantityOnHand: number;
   valueCents: number;
 };
 
 export function inventoryBalances(
-  items: { id: string; sku: string; name: string; unit_cost: number }[],
+  items: {
+    id: string;
+    sku: string;
+    name: string;
+    unit_cost: number;
+    sale_price?: number | null;
+  }[],
   postings: {
     inventory_item_id?: string | null;
     kind: string;
@@ -127,6 +134,7 @@ export function inventoryBalances(
       value.set(posting.inventory_item_id, currentValue + debitCents);
     } else if (
       posting.kind === "issue" ||
+      posting.kind === "sale" ||
       (posting.kind === "adjustment" && creditCents > 0)
     ) {
       qty.set(posting.inventory_item_id, currentQty - quantity);
@@ -136,7 +144,11 @@ export function inventoryBalances(
 
   const known = new Set(items.map((item) => item.id));
   const rows = items.map((item) => ({
-    ...item,
+    id: item.id,
+    sku: item.sku,
+    name: item.name,
+    unit_cost: item.unit_cost,
+    sale_price: Number(item.sale_price ?? 0),
     quantityOnHand: qty.get(item.id) ?? 0,
     valueCents: value.get(item.id) ?? 0,
   }));
@@ -150,6 +162,7 @@ export function inventoryBalances(
       sku: "—",
       name: "Unassigned (general journal)",
       unit_cost: 0,
+      sale_price: 0,
       quantityOnHand,
       valueCents,
     });

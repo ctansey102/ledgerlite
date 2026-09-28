@@ -200,6 +200,18 @@ async function findOrCreateAccount(
   return created as Account;
 }
 
+/** Revenue account credited when inventory is sold. */
+export async function ensureSalesRevenueAccount(userId: string) {
+  return findOrCreateAccount(userId, {
+    code: "4100",
+    name: "Sales Revenue",
+    type: "revenue",
+    normal_balance: "credit",
+    cash_flow_section: "operating",
+    is_contra: false,
+  });
+}
+
 /** Ensures AR/AP/FA/Inventory/Cash/Payroll control accounts (and companions) exist. */
 export async function ensureControlAccounts(userId: string) {
   const controls = {
