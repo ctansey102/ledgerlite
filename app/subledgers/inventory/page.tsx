@@ -18,7 +18,11 @@ import {
 import { accountTypeLabels, accountTypeOrder } from "@/lib/ledger";
 import { dollarsToCents, formatDate, formatMoney, todayISO } from "@/lib/money";
 import { inventoryBalances } from "@/lib/subledgers";
-import { controlAccountFor } from "@/lib/control-accounts";
+import {
+  controlAccountFor,
+  controlSubledgerByAccountId,
+} from "@/lib/control-accounts";
+import { syncControlSubledgers } from "@/lib/posting";
 
 export default async function InventoryPage({
   searchParams,
@@ -26,7 +30,10 @@ export default async function InventoryPage({
   searchParams: Promise<{ error?: string }>;
 }) {
   const user = await requireUser();
-  const { error } = await searchParams;
+  const [{ error }] = await Promise.all([
+    searchParams,
+    syncControlSubledgers(user.id),
+  ]);
   const [profile, accounts, items, postings] = await Promise.all([
     getProfile(user.id),
     getAccounts(user.id),
@@ -35,6 +42,7 @@ export default async function InventoryPage({
   ]);
 
   const inventory = controlAccountFor(accounts, "inv");
+  const controlOf = controlSubledgerByAccountId(accounts);
   const balances = inventoryBalances(items, postings);
   const totalValue = balances.reduce((sum, item) => sum + item.valueCents, 0);
 
@@ -202,10 +210,13 @@ export default async function InventoryPage({
               {accountTypeOrder.map((type) => (
                 <optgroup key={type} label={accountTypeLabels[type]}>
                   {accounts
-                    .filter(
-                      (account) =>
-                        account.type === type && account.subledger !== "inv",
-                    )
+                    .filter((account) => {
+                      const control = controlOf[account.id];
+                      return (
+                        account.type === type &&
+                        (!control || control === "cash")
+                      );
+                    })
                     .map((account) => (
                       <option key={account.id} value={account.id}>
                         {account.code} · {account.name}

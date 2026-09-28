@@ -3,24 +3,86 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { requireUser } from "@/lib/data";
+import { getAccounts, requireUser } from "@/lib/data";
+import { controlSubledgerByAccountId } from "@/lib/control-accounts";
+import { missingControlPostings, partyNoun } from "@/lib/control-postings";
+import type { AccountSubledger } from "@/lib/database.types";
 import { dollarsToCents } from "@/lib/money";
-import { attachMissingCashPostings } from "@/lib/posting";
+import { postBalancedEntry } from "@/lib/posting";
 import { revalidateBooks } from "@/lib/revalidate-books";
 
 function asString(value: FormDataEntryValue | null) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+async function assertOwnedParty(
+  userId: string,
+  subledger: AccountSubledger,
+  partyId: string,
+) {
+  const supabase = await createClient();
+  const label = partyNoun(subledger);
+
+  if (subledger === "ar") {
+    const { data, error } = await supabase
+      .from("customers")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("id", partyId)
+      .maybeSingle();
+    if (error || !data) throw new Error(`That ${label} was not found.`);
+    return;
+  }
+  if (subledger === "ap") {
+    const { data, error } = await supabase
+      .from("vendors")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("id", partyId)
+      .maybeSingle();
+    if (error || !data) throw new Error(`That ${label} was not found.`);
+    return;
+  }
+  if (subledger === "fa" || subledger === "fa_accum") {
+    const { data, error } = await supabase
+      .from("fixed_assets")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("id", partyId)
+      .maybeSingle();
+    if (error || !data) throw new Error(`That ${label} was not found.`);
+    return;
+  }
+  if (subledger === "inv") {
+    const { data, error } = await supabase
+      .from("inventory_items")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("id", partyId)
+      .maybeSingle();
+    if (error || !data) throw new Error(`That ${label} was not found.`);
+    return;
+  }
+  if (subledger === "payroll") {
+    const { data, error } = await supabase
+      .from("employees")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("id", partyId)
+      .maybeSingle();
+    if (error || !data) throw new Error(`That ${label} was not found.`);
+  }
+}
+
 export async function createJournalEntry(formData: FormData) {
   const user = await requireUser();
-  const supabase = await createClient();
 
   const entryDate = asString(formData.get("entry_date"));
   const description = asString(formData.get("description"));
   const accountIds = formData.getAll("account_id").map(asString);
   const debits = formData.getAll("debit").map(asString);
   const credits = formData.getAll("credit").map(asString);
+  const partyIds = formData.getAll("party_id").map(asString);
 
   if (!entryDate || !description) {
     redirect("/journal/new?error=Add a date and a short description.");
@@ -31,6 +93,7 @@ export async function createJournalEntry(formData: FormData) {
       accountId,
       debitCents: dollarsToCents(debits[index]),
       creditCents: dollarsToCents(credits[index]),
+      partyId: partyIds[index] || null,
     }))
     .filter((line) => line.accountId && (line.debitCents > 0 || line.creditCents > 0));
 
@@ -49,57 +112,53 @@ export async function createJournalEntry(formData: FormData) {
     redirect("/journal/new?error=Debits and credits must be equal before you can save.");
   }
 
-  const { data: entry, error: entryError } = await supabase
-    .from("journal_entries")
-    .insert({
-      user_id: user.id,
-      entered_by: user.id,
-      entry_date: entryDate,
-      description,
-    })
-    .select("id")
-    .single();
+  const accounts = await getAccounts(user.id);
+  const subledgerById = controlSubledgerByAccountId(accounts);
+  const reconciled = missingControlPostings({
+    entryDate,
+    description,
+    lines,
+    accountSubledgers: Object.entries(subledgerById).flatMap(([id, subledger]) =>
+      subledger ? [{ id, subledger }] : [],
+    ),
+  });
 
-  if (entryError || !entry) {
+  if (reconciled.needsParty.length > 0) {
+    const missing = reconciled.needsParty[0];
+    const account = accounts.find((row) => row.id === missing.accountId);
     redirect(
-      `/journal/new?error=${encodeURIComponent(entryError?.message ?? "Could not save the entry.")}`,
+      `/journal/new?error=${encodeURIComponent(
+        `Choose a ${partyNoun(missing.subledger)} for ${account?.name ?? "that control account"} so its subledger stays in balance with the general ledger.`,
+      )}`,
     );
   }
 
-  const { error: lineError } = await supabase.from("journal_lines").insert(
-    lines.map((line) => ({
-      entry_id: entry.id,
-      account_id: line.accountId,
-      user_id: user.id,
-      debit: line.debitCents / 100,
-      credit: line.creditCents / 100,
-    })),
-  );
-
-  if (lineError) {
-    await supabase.from("journal_entries").delete().eq("id", entry.id);
-    redirect(`/journal/new?error=${encodeURIComponent(lineError.message)}`);
-  }
-
+  let entryId: string;
   try {
-    await attachMissingCashPostings({
+    for (const line of lines) {
+      const subledger = subledgerById[line.accountId];
+      if (!subledger || subledger === "cash" || !line.partyId) continue;
+      await assertOwnedParty(user.id, subledger, line.partyId);
+    }
+
+    entryId = await postBalancedEntry({
       userId: user.id,
-      entryId: entry.id,
       entryDate,
       description,
-      lines,
+      source: "manual",
+      glLines: lines,
+      subledgerPostings: reconciled.postings,
     });
   } catch (error) {
-    await supabase.from("subledger_postings").delete().eq("journal_entry_id", entry.id);
-    await supabase.from("journal_lines").delete().eq("entry_id", entry.id);
-    await supabase.from("journal_entries").delete().eq("id", entry.id);
     redirect(
-      `/journal/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Could not update the cash book.")}`,
+      `/journal/new?error=${encodeURIComponent(
+        error instanceof Error ? error.message : "Could not save the entry.",
+      )}`,
     );
   }
 
   revalidateBooks();
-  redirect(`/journal/${entry.id}`);
+  redirect(`/journal/${entryId}`);
 }
 
 export async function deleteJournalEntry(formData: FormData) {

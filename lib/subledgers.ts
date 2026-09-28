@@ -134,11 +134,38 @@ export function inventoryBalances(
     }
   }
 
-  return items.map((item) => ({
+  const known = new Set(items.map((item) => item.id));
+  const rows = items.map((item) => ({
     ...item,
     quantityOnHand: qty.get(item.id) ?? 0,
     valueCents: value.get(item.id) ?? 0,
   }));
+
+  for (const [id, valueCents] of value) {
+    if (known.has(id)) continue;
+    const quantityOnHand = qty.get(id) ?? 0;
+    if (quantityOnHand === 0 && valueCents === 0) continue;
+    rows.push({
+      id,
+      sku: "—",
+      name: "Unassigned (general journal)",
+      unit_cost: 0,
+      quantityOnHand,
+      valueCents,
+    });
+  }
+
+  return rows;
+}
+
+export function payrollTotalCents(
+  postings: { debit: number | string; credit: number | string }[],
+) {
+  return postings.reduce(
+    (sum, posting) =>
+      sum + dollarsToCents(posting.debit) - dollarsToCents(posting.credit),
+    0,
+  );
 }
 
 export function employeeWageTotals(

@@ -15,8 +15,9 @@ import {
   requireUser,
 } from "@/lib/data";
 import { dollarsToCents, formatDate, formatMoney, todayISO } from "@/lib/money";
-import { employeeWageTotals } from "@/lib/subledgers";
+import { employeeWageTotals, payrollTotalCents } from "@/lib/subledgers";
 import { controlAccountFor } from "@/lib/control-accounts";
+import { syncControlSubledgers } from "@/lib/posting";
 
 export default async function PayrollPage({
   searchParams,
@@ -24,7 +25,10 @@ export default async function PayrollPage({
   searchParams: Promise<{ error?: string }>;
 }) {
   const user = await requireUser();
-  const { error } = await searchParams;
+  const [{ error }] = await Promise.all([
+    searchParams,
+    syncControlSubledgers(user.id),
+  ]);
   const [profile, accounts, employees, postings] = await Promise.all([
     getProfile(user.id),
     getAccounts(user.id),
@@ -34,10 +38,7 @@ export default async function PayrollPage({
 
   const wages = controlAccountFor(accounts, "payroll");
   const wageTotals = employeeWageTotals(postings);
-  const periodTotal = postings.reduce(
-    (sum, posting) => sum + dollarsToCents(posting.debit),
-    0,
-  );
+  const periodTotal = payrollTotalCents(postings);
 
   return (
     <AppShell name={profile?.display_name ?? "Bookkeeper"} role={profile?.role}>
@@ -216,7 +217,10 @@ export default async function PayrollPage({
                     </td>
                     <td className="px-4 py-3">{posting.description}</td>
                     <td className="money px-4 py-3 text-right">
-                      {formatMoney(dollarsToCents(posting.debit))}
+                      {formatMoney(
+                        dollarsToCents(posting.debit) -
+                          dollarsToCents(posting.credit),
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <Link

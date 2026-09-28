@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { backfillCashSubledger } from "@/lib/posting";
+import { syncControlSubledgers } from "@/lib/posting";
 import { createClient } from "@/lib/supabase/server";
 import type {
   Account,
@@ -171,13 +171,7 @@ export async function getSubledgerPostings(
   userId: string,
   subledger?: "ar" | "ap" | "fa" | "inv" | "cash" | "payroll",
 ) {
-  if (!subledger || subledger === "cash") {
-    try {
-      await backfillCashSubledger(userId);
-    } catch (error) {
-      console.error("Could not backfill the cash book.", error);
-    }
-  }
+  await syncControlSubledgers(userId);
 
   const supabase = await createClient();
   let query = supabase

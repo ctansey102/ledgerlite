@@ -9,6 +9,7 @@ import { AppShell } from "@/components/app-shell";
 import { ConfirmDeleteForm } from "@/components/confirm-delete-form";
 import { Notice } from "@/components/notice";
 import { controlAccountFor } from "@/lib/control-accounts";
+import { syncControlSubledgers } from "@/lib/posting";
 import {
   flattenLedgerLines,
   getAccounts,
@@ -32,7 +33,10 @@ export default async function ArSubledgerPage({
   searchParams: Promise<{ error?: string }>;
 }) {
   const user = await requireUser();
-  const { error } = await searchParams;
+  const [{ error }] = await Promise.all([
+    searchParams,
+    syncControlSubledgers(user.id),
+  ]);
   const [profile, accounts, customers, postings, rawLines] = await Promise.all([
     getProfile(user.id),
     getAccounts(user.id),

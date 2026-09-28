@@ -17,9 +17,12 @@ import {
   requireUser,
 } from "@/lib/data";
 import { formatMoney } from "@/lib/money";
+import { syncControlSubledgers } from "@/lib/posting";
 import {
+  cashBookSignedCents,
   controlBalanceCents,
   inventoryBalances,
+  payrollTotalCents,
   subledgerTotalCents,
 } from "@/lib/subledgers";
 
@@ -29,7 +32,10 @@ export default async function SubledgersHubPage({
   searchParams: Promise<{ error?: string; message?: string }>;
 }) {
   const user = await requireUser();
-  const { error, message } = await searchParams;
+  const [{ error, message }] = await Promise.all([
+    searchParams,
+    syncControlSubledgers(user.id),
+  ]);
   const [
     profile,
     accounts,
@@ -121,14 +127,11 @@ export default async function SubledgersHubPage({
     (sum, item) => sum + item.valueCents,
     0,
   );
-  const cashSub = cashPostings.reduce((sum, posting) => {
-    const debit = Math.round(Number(posting.debit) * 100);
-    const credit = Math.round(Number(posting.credit) * 100);
-    return sum + debit - credit;
-  }, 0);
-  const payrollSub = payrollPostings.reduce((sum, posting) => {
-    return sum + Math.round(Number(posting.debit) * 100);
-  }, 0);
+  const cashSub = cashPostings.reduce(
+    (sum, posting) => sum + cashBookSignedCents(posting),
+    0,
+  );
+  const payrollSub = payrollTotalCents(payrollPostings);
   const faNetGl = faGl - faAccumGl;
 
   const cards = [

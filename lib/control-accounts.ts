@@ -243,6 +243,16 @@ export async function ensureControlAccounts(userId: string) {
   return { ...controls, revenue, cogs, depreciationExpense };
 }
 
+export const SUBLEDGER_KEYS: SubledgerKey[] = [
+  "ar",
+  "ap",
+  "fa",
+  "fa_accum",
+  "inv",
+  "cash",
+  "payroll",
+];
+
 export function controlAccountFor(
   accounts: Account[],
   key: SubledgerKey,
@@ -258,4 +268,15 @@ export function controlAccountFor(
       (account) => account.name.toLowerCase() === defaults.name.toLowerCase(),
     )
   );
+}
+
+/** Account id → control subledger, using the same resolution as the subledger pages. */
+export function controlSubledgerByAccountId(accounts: Account[]) {
+  const map: Partial<Record<string, SubledgerKey>> = {};
+  for (const key of SUBLEDGER_KEYS) {
+    const account = controlAccountFor(accounts, key);
+    if (!account || map[account.id]) continue;
+    map[account.id] = key;
+  }
+  return map;
 }

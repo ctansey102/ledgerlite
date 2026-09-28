@@ -8,7 +8,11 @@ import {
 import { AppShell } from "@/components/app-shell";
 import { ConfirmDeleteForm } from "@/components/confirm-delete-form";
 import { Notice } from "@/components/notice";
-import { controlAccountFor } from "@/lib/control-accounts";
+import {
+  controlAccountFor,
+  controlSubledgerByAccountId,
+} from "@/lib/control-accounts";
+import { syncControlSubledgers } from "@/lib/posting";
 import {
   flattenLedgerLines,
   getAccounts,
@@ -31,7 +35,10 @@ export default async function ApSubledgerPage({
   searchParams: Promise<{ error?: string }>;
 }) {
   const user = await requireUser();
-  const { error } = await searchParams;
+  const [{ error }] = await Promise.all([
+    searchParams,
+    syncControlSubledgers(user.id),
+  ]);
   const [profile, accounts, vendors, postings, rawLines] = await Promise.all([
     getProfile(user.id),
     getAccounts(user.id),
@@ -50,9 +57,12 @@ export default async function ApSubledgerPage({
     : 0;
   const subTotal = subledgerTotalCents("ap", postings);
   const balances = sumPartyBalances("ap", postings, "vendor_id");
-  const expenseAccounts = accounts.filter(
-    (account) => account.type === "expense" || account.type === "asset",
-  );
+  const controlOf = controlSubledgerByAccountId(accounts);
+  const expenseAccounts = accounts.filter((account) => {
+    const control = controlOf[account.id];
+    if (control && control !== "cash") return false;
+    return account.type === "expense" || account.type === "asset";
+  });
   const cashAccounts = accounts.filter(
     (account) =>
       account.cash_flow_section === "cash" || account.code === "1000",

@@ -1,5 +1,16 @@
 import { cache } from "react";
-import { dollarsToCents } from "@/lib/money";
+import {
+  controlSubledgerByAccountId,
+  type SubledgerKey,
+} from "@/lib/control-accounts";
+import {
+  missingControlPostings,
+  UNASSIGNED_PARTY_NAME,
+  type ControlPostingDraft,
+  type ExistingControlPosting,
+} from "@/lib/control-postings";
+import type { Account } from "@/lib/database.types";
+import { dollarsToCents, todayISO } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
 
 export type GlLineInput = {
@@ -8,62 +19,7 @@ export type GlLineInput = {
   creditCents: number;
 };
 
-export type SubledgerPostingInput = {
-  subledger: "ar" | "ap" | "fa" | "inv" | "cash" | "payroll";
-  kind: string;
-  postingDate: string;
-  description: string;
-  debitCents: number;
-  creditCents: number;
-  customerId?: string | null;
-  vendorId?: string | null;
-  assetId?: string | null;
-  inventoryItemId?: string | null;
-  employeeId?: string | null;
-  quantity?: number | null;
-};
-
-type CashAmount = { debitCents: number; creditCents: number };
-
-/** Cash-book lines still needed so the cash subledger matches cash GL lines. */
-export function missingCashPostings(input: {
-  entryDate: string;
-  description: string;
-  lines: { accountId: string; debitCents: number; creditCents: number }[];
-  cashAccountIds: ReadonlySet<string>;
-  existing?: CashAmount[];
-}): SubledgerPostingInput[] {
-  const cashLines = input.lines.filter(
-    (line) =>
-      input.cashAccountIds.has(line.accountId) &&
-      ((line.debitCents > 0 && line.creditCents === 0) ||
-        (line.creditCents > 0 && line.debitCents === 0)),
-  );
-  const remaining = [...(input.existing ?? [])];
-  const missing: SubledgerPostingInput[] = [];
-
-  for (const line of cashLines) {
-    const index = remaining.findIndex(
-      (posting) =>
-        posting.debitCents === line.debitCents &&
-        posting.creditCents === line.creditCents,
-    );
-    if (index >= 0) {
-      remaining.splice(index, 1);
-      continue;
-    }
-    missing.push({
-      subledger: "cash",
-      kind: line.debitCents > 0 ? "receipt" : "disbursement",
-      postingDate: input.entryDate,
-      description: input.description,
-      debitCents: line.debitCents,
-      creditCents: line.creditCents,
-    });
-  }
-
-  return missing;
-}
+export type SubledgerPostingInput = ControlPostingDraft;
 
 function postingRows(
   userId: string,
@@ -88,25 +44,152 @@ function postingRows(
   }));
 }
 
-export async function loadCashControlIds(userId: string) {
+async function loadControlAccounts(userId: string) {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("accounts")
+    .select("*")
+    .eq("user_id", userId);
+  if (error) throw new Error(error.message);
+  const accounts = (data ?? []) as Account[];
+  const subledgerById = controlSubledgerByAccountId(accounts);
+  const accountSubledgers = Object.entries(subledgerById).flatMap(
+    ([id, subledger]) => (subledger ? [{ id, subledger }] : []),
+  );
+  return { accountSubledgers };
+}
+
+type PartyKind = "ar" | "ap" | "fa" | "inv" | "payroll";
+
+function partyKindFor(subledger: SubledgerKey): PartyKind | null {
+  if (subledger === "cash") return null;
+  if (subledger === "fa_accum") return "fa";
+  return subledger;
+}
+
+async function ensureUnassignedParty(userId: string, kind: PartyKind) {
+  const supabase = await createClient();
+  const notes =
+    "General-journal amounts that were not posted to a specific subsidiary record.";
+
+  if (kind === "ar") {
+    return ensurePartyByName(userId, "customers", notes);
+  }
+  if (kind === "ap") {
+    return ensurePartyByName(userId, "vendors", notes);
+  }
+  if (kind === "payroll") {
+    return ensurePartyByName(userId, "employees", notes);
+  }
+  if (kind === "inv") {
+    return ensureUnassignedItem(userId, notes);
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from("fixed_assets")
     .select("id")
     .eq("user_id", userId)
-    .eq("subledger", "cash");
-  if (error) throw new Error(error.message);
-  return new Set((data ?? []).map((account) => account.id));
+    .eq("name", UNASSIGNED_PARTY_NAME)
+    .limit(1);
+  if (existingError) throw new Error(existingError.message);
+  if (existing?.[0]) return existing[0].id;
+
+  const { data: created, error } = await supabase
+    .from("fixed_assets")
+    .insert({
+      user_id: userId,
+      name: UNASSIGNED_PARTY_NAME,
+      acquisition_date: todayISO(),
+      cost: 0,
+      salvage_value: 0,
+      useful_life_months: 1,
+      status: "active",
+      notes,
+    })
+    .select("id")
+    .single();
+  if (created) return created.id;
+  if (error?.code === "23505") {
+    const { data: again, error: againError } = await supabase
+      .from("fixed_assets")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("name", UNASSIGNED_PARTY_NAME)
+      .limit(1);
+    if (againError) throw new Error(againError.message);
+    if (again?.[0]) return again[0].id;
+  }
+  throw new Error(error?.message ?? "Could not record unassigned asset activity.");
+}
+
+async function ensurePartyByName(
+  userId: string,
+  table: "customers" | "vendors" | "employees",
+  notes: string,
+) {
+  const supabase = await createClient();
+  const { data: existing, error: existingError } = await supabase
+    .from(table)
+    .select("id")
+    .eq("user_id", userId)
+    .eq("name", UNASSIGNED_PARTY_NAME)
+    .limit(1);
+  if (existingError) throw new Error(existingError.message);
+  if (existing?.[0]) return existing[0].id;
+
+  const { data: created, error } = await supabase
+    .from(table)
+    .insert({ user_id: userId, name: UNASSIGNED_PARTY_NAME, notes })
+    .select("id")
+    .single();
+  if (created) return created.id;
+  throw new Error(error?.message ?? "Could not record unassigned subledger activity.");
+}
+
+async function ensureUnassignedItem(userId: string, notes: string) {
+  const supabase = await createClient();
+  const { data: existing, error: existingError } = await supabase
+    .from("inventory_items")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("sku", "UNASSIGNED")
+    .limit(1);
+  if (existingError) throw new Error(existingError.message);
+  if (existing?.[0]) return existing[0].id;
+
+  const { data: created, error } = await supabase
+    .from("inventory_items")
+    .insert({
+      user_id: userId,
+      sku: "UNASSIGNED",
+      name: UNASSIGNED_PARTY_NAME,
+      unit_cost: 0,
+      notes,
+    })
+    .select("id")
+    .single();
+  if (created) return created.id;
+  if (error?.code === "23505") {
+    const { data: again, error: againError } = await supabase
+      .from("inventory_items")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("sku", "UNASSIGNED")
+      .limit(1);
+    if (againError) throw new Error(againError.message);
+    if (again?.[0]) return again[0].id;
+  }
+  throw new Error(error?.message ?? "Could not record unassigned inventory activity.");
 }
 
 /**
- * Adds cash-book rows for journal lines already posted to the cash control
- * account. Collections and payments from other subledgers used to hit Cash
- * in the GL without a matching cash subledger row.
+ * Adds subsidiary rows for control-account lines that were posted in the
+ * general journal without matching detail. Cash is recorded directly. Other
+ * control accounts are parked on an unassigned party so the totals can tie.
  */
-async function backfillCashSubledgerOnce(userId: string) {
-  const cashAccountIds = await loadCashControlIds(userId);
-  const ids = [...cashAccountIds];
+async function backfillControlSubledgersOnce(userId: string) {
+  const { accountSubledgers } = await loadControlAccounts(userId);
+  const ids = accountSubledgers.map((account) => account.id);
   if (ids.length === 0) return;
 
   const supabase = await createClient();
@@ -121,15 +204,14 @@ async function backfillCashSubledgerOnce(userId: string) {
         .in("account_id", ids),
       supabase
         .from("subledger_postings")
-        .select("journal_entry_id, debit, credit")
-        .eq("user_id", userId)
-        .eq("subledger", "cash"),
+        .select("journal_entry_id, subledger, debit, credit")
+        .eq("user_id", userId),
     ]);
 
   if (lineError) throw new Error(lineError.message);
   if (existingError) throw new Error(existingError.message);
 
-  type CashLineRow = {
+  type ControlLineRow = {
     account_id: string;
     debit: number | string;
     credit: number | string;
@@ -146,11 +228,11 @@ async function backfillCashSubledgerOnce(userId: string) {
       entryDate: string;
       description: string;
       lines: { accountId: string; debitCents: number; creditCents: number }[];
-      existing: CashAmount[];
+      existing: ExistingControlPosting[];
     }
   >();
 
-  for (const row of (rawLines ?? []) as CashLineRow[]) {
+  for (const row of (rawLines ?? []) as ControlLineRow[]) {
     const entry = Array.isArray(row.journal_entries)
       ? row.journal_entries[0]
       : row.journal_entries;
@@ -173,42 +255,86 @@ async function backfillCashSubledgerOnce(userId: string) {
     const current = groups.get(posting.journal_entry_id);
     if (!current) continue;
     current.existing.push({
+      subledger: posting.subledger,
       debitCents: dollarsToCents(posting.debit),
       creditCents: dollarsToCents(posting.credit),
     });
   }
 
-  const rows = [...groups.entries()].flatMap(([entryId, group]) =>
-    postingRows(
-      userId,
-      entryId,
-      missingCashPostings({
-        entryDate: group.entryDate,
-        description: group.description,
-        lines: group.lines,
-        cashAccountIds,
-        existing: group.existing,
-      }),
-    ),
-  );
+  const partyIds = new Map<PartyKind, string>();
+  const drafts: { entryId: string; posting: ControlPostingDraft }[] = [];
 
+  for (const [entryId, group] of groups) {
+    const uncovered = missingControlPostings({
+      entryDate: group.entryDate,
+      description: group.description,
+      lines: group.lines,
+      accountSubledgers,
+      existing: group.existing,
+    });
+    if (uncovered.needsParty.length === 0) {
+      for (const posting of uncovered.postings) {
+        drafts.push({ entryId, posting });
+      }
+      continue;
+    }
+
+    const kindsNeeded = new Set<PartyKind>();
+    for (const need of uncovered.needsParty) {
+      const kind = partyKindFor(need.subledger);
+      if (kind) kindsNeeded.add(kind);
+    }
+    for (const kind of kindsNeeded) {
+      if (!partyIds.has(kind)) {
+        partyIds.set(kind, await ensureUnassignedParty(userId, kind));
+      }
+    }
+
+    const lines = group.lines.map((line) => {
+      const subledger = accountSubledgers.find(
+        (account) => account.id === line.accountId,
+      )?.subledger;
+      const kind = subledger ? partyKindFor(subledger) : null;
+      if (
+        !kind ||
+        !uncovered.needsParty.some((need) => need.accountId === line.accountId)
+      ) {
+        return line;
+      }
+      return { ...line, partyId: partyIds.get(kind) };
+    });
+
+    const reconciled = missingControlPostings({
+      entryDate: group.entryDate,
+      description: group.description,
+      lines,
+      accountSubledgers,
+      existing: group.existing,
+    });
+    for (const posting of reconciled.postings) {
+      drafts.push({ entryId, posting });
+    }
+  }
+
+  const rows = drafts.flatMap(({ entryId, posting }) =>
+    postingRows(userId, entryId, [posting]),
+  );
   if (rows.length === 0) return;
 
   const { data: fresh, error: freshError } = await supabase
     .from("subledger_postings")
-    .select("journal_entry_id, debit, credit")
-    .eq("user_id", userId)
-    .eq("subledger", "cash");
+    .select("journal_entry_id, subledger, debit, credit")
+    .eq("user_id", userId);
   if (freshError) throw new Error(freshError.message);
 
   const already = new Map<string, number>();
   for (const posting of fresh ?? []) {
-    const key = `${posting.journal_entry_id}:${dollarsToCents(posting.debit)}:${dollarsToCents(posting.credit)}`;
+    const key = `${posting.journal_entry_id}:${posting.subledger}:${dollarsToCents(posting.debit)}:${dollarsToCents(posting.credit)}`;
     already.set(key, (already.get(key) ?? 0) + 1);
   }
 
   const pending = rows.filter((row) => {
-    const key = `${row.journal_entry_id}:${dollarsToCents(row.debit)}:${dollarsToCents(row.credit)}`;
+    const key = `${row.journal_entry_id}:${row.subledger}:${dollarsToCents(row.debit)}:${dollarsToCents(row.credit)}`;
     const count = already.get(key) ?? 0;
     if (count > 0) {
       already.set(key, count - 1);
@@ -223,29 +349,14 @@ async function backfillCashSubledgerOnce(userId: string) {
   if (error) throw new Error(error.message);
 }
 
-export const backfillCashSubledger = cache(backfillCashSubledgerOnce);
+export const backfillControlSubledgers = cache(backfillControlSubledgersOnce);
 
-export async function attachMissingCashPostings(options: {
-  userId: string;
-  entryId: string;
-  entryDate: string;
-  description: string;
-  lines: { accountId: string; debitCents: number; creditCents: number }[];
-}) {
-  const cashAccountIds = await loadCashControlIds(options.userId);
-  const missing = missingCashPostings({
-    entryDate: options.entryDate,
-    description: options.description,
-    lines: options.lines,
-    cashAccountIds,
-  });
-  if (missing.length === 0) return;
-
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("subledger_postings")
-    .insert(postingRows(options.userId, options.entryId, missing));
-  if (error) throw new Error(error.message);
+export async function syncControlSubledgers(userId: string) {
+  try {
+    await backfillControlSubledgers(userId);
+  } catch (error) {
+    console.error("Could not sync subledgers with the general ledger.", error);
+  }
 }
 
 /**
@@ -325,22 +436,24 @@ export async function postBalancedEntry(options: {
   }
 
   try {
-    const cashAccountIds = await loadCashControlIds(userId);
-    const postings = [
-      ...subledgerPostings,
-      ...missingCashPostings({
-        entryDate,
-        description,
-        lines: activeLines,
-        cashAccountIds,
-        existing: subledgerPostings
-          .filter((posting) => posting.subledger === "cash")
-          .map((posting) => ({
-            debitCents: posting.debitCents,
-            creditCents: posting.creditCents,
-          })),
-      }),
-    ];
+    const { accountSubledgers } = await loadControlAccounts(userId);
+    const reconciled = missingControlPostings({
+      entryDate,
+      description,
+      lines: activeLines,
+      accountSubledgers,
+      existing: subledgerPostings.map((posting) => ({
+        subledger: posting.subledger,
+        debitCents: posting.debitCents,
+        creditCents: posting.creditCents,
+      })),
+    });
+    if (reconciled.needsParty.length > 0) {
+      throw new Error(
+        "Choose a customer, vendor, asset, item, or employee for each control account so the subledger stays in balance with the general ledger.",
+      );
+    }
+    const postings = [...subledgerPostings, ...reconciled.postings];
 
     if (postings.length > 0) {
       const { error: subError } = await supabase
